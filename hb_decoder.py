@@ -1233,6 +1233,26 @@ def reconstruct_image(
         log.info("Dark correction: pre=%.0f, post=%.0f, drift=%.0f",
                  dp_med, dq_med, dq_med - dp_med)
 
+    # ── Flat-field row gain correction ──────────────────────────────
+    #   Apply per-row detector gain profile from a blank (no-patient)
+    #   exposure capture.  Corrects die-edge fall-off and inter-die
+    #   gain variation.  The profile is a 1316-element array normalised
+    #   to median=1.0.  If the file is missing, this step is skipped.
+    try:
+        ff_path = Path(__file__).parent / "flat_field_row_profile.npy"
+        if ff_path.exists():
+            ff_row = np.load(ff_path)
+            if len(ff_row) == height:
+                ff_row = np.clip(ff_row, 0.5, 2.0)
+                img_f /= ff_row[:, np.newaxis]
+                log.info("Flat-field row correction applied (range %.2f–%.2f)",
+                         ff_row.min(), ff_row.max())
+            else:
+                log.warning("Flat-field row profile has %d rows, expected %d — skipped",
+                            len(ff_row), height)
+    except Exception as exc:
+        log.debug("Flat-field row correction skipped: %s", exc)
+
     # ── Row repair ─────────────────────────────────────────────────────
     #   1. Telemetry-repair spike rows: the 36-pixel interpolated blocks
     #      drift across columns, creating single-row brightness spikes.
