@@ -1,0 +1,71 @@
+name: Build and Deploy to PureXS-releases
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-deploy:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish x64 (self-contained)
+        run: >
+          dotnet publish PureXS.WPF/PureXS.WPF.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -o publish/x64
+
+      - name: Publish x86 (self-contained)
+        run: >
+          dotnet publish PureXS.WPF/PureXS.WPF.csproj
+          -c Release
+          -r win-x86
+          --self-contained true
+          -o publish/x86
+
+      - name: Clone PureXS-releases
+        run: |
+          git clone https://x-access-token:${{ secrets.DEPLOY_TOKEN }}@github.com/${{ github.repository_owner }}/PureXS-releases.git releases-repo
+        shell: bash
+
+      - name: Stage artifacts into releases repo
+        run: |
+          # Clear previous binaries but keep SetupAndRun.bat and README.md at root
+          cd releases-repo
+
+          # Remove old x64 binaries (everything except .git, x86/, SetupAndRun.bat, README.md)
+          Get-ChildItem -Path . -Exclude '.git','x86','SetupAndRun.bat','README.md' |
+            Where-Object { $_.Name -ne '.git' } |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+          # Remove old x86 binaries
+          if (Test-Path x86) { Remove-Item x86\* -Recurse -Force -ErrorAction SilentlyContinue }
+
+          # Copy new x64 build into root
+          Copy-Item -Path ..\publish\x64\* -Destination . -Recurse -Force
+
+          # Copy new x86 build into x86/
+          New-Item -ItemType Directory -Path x86 -Force | Out-Null
+          Copy-Item -Path ..\publish\x86\* -Destination x86\ -Recurse -Force
+        shell: pwsh
+
+      - name: Commit and push to PureXS-releases
+        run: |
+          cd releases-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && echo "No changes to deploy" && exit 0
+          git commit -m "Deploy: ${{ github.sha }}"
+          git push origin main
+        shell: bash
