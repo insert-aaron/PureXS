@@ -1359,36 +1359,62 @@ def reconstruct_image(
     col_trend = uniform_filter1d(col_meds, size=101)
     img_f *= (col_trend / col_meds)[np.newaxis, :]
 
-    # ── WWE tone mapping + CLAHE ───────────────────────────────────
-    #   Window Width Equalization inspired by Sidexis WWEXP=1,7000,0,750,20.
-    #   1. Percentile-normalise to [0,1]
-    #   2. Apply gamma correction (gamma ≈ 0.4): expands tissue/bone detail,
-    #      compresses air/background — matches Sidexis output histogram
-    #   3. Invert for dental display convention (bone = bright)
-    #   4. CLAHE for local contrast enhancement
+    # ── WWE tone mapping + MUSICA contrast enhancement ─────────────
+    #   1. Percentile-normalise to [0,1] and apply gamma (0.4) for
+    #      dental display convention (bone = bright, air = dark).
+    #   2. Horizontal deband: gentle column-axis Gaussian blur to soften
+    #      frame-boundary step edges without blurring vertical anatomy.
+    #   3. MUSICA: Laplacian pyramid multi-scale contrast amplification.
+    #      Fine/medium detail boosted; coarse scale (where banding lives)
+    #      suppressed. Non-linear tanh compression prevents halos.
+    #   4. Gentle CLAHE for final local adaptation.
+    from scipy.ndimage import gaussian_filter, gaussian_filter1d
+
     WWE_GAMMA = 0.4
     p_lo, p_hi = np.percentile(img_f, [0.5, 99.5])
     if p_hi <= p_lo:
         p_hi = p_lo + 1.0
-
     img_norm = np.clip((img_f - p_lo) / (p_hi - p_lo), 0, 1)
-
     if invert:
-        # display = 1 - raw^gamma  (bone bright, air dark)
         img_norm = 1.0 - np.power(img_norm, WWE_GAMMA)
     else:
         img_norm = np.power(img_norm, WWE_GAMMA)
 
-    img_16 = (img_norm * 65535).astype(np.uint16)
+    # Horizontal deband: soften column-to-column steps (sigma=1.5 cols)
+    img_norm = gaussian_filter1d(img_norm, sigma=1.5, axis=1)
+
+    # MUSICA Laplacian pyramid (4 detail scales + residual)
+    MUSICA_SIGMAS = [2, 8, 32, 128]
+    MUSICA_GAINS = [1.5, 2.0, 1.2, 0.2]
+
+    levels = [img_norm]
+    for sigma in MUSICA_SIGMAS:
+        levels.append(gaussian_filter(img_norm, sigma=sigma))
+
+    laplacian = [levels[i] - levels[i + 1] for i in range(len(levels) - 1)]
+    residual = levels[-1]
+
+    # Non-linear boost: tanh compression prevents halos at strong edges
+    for i in range(len(laplacian)):
+        laplacian[i] = np.tanh(laplacian[i] * MUSICA_GAINS[i] * 3) / 3
+
+    # Reconstruct: flatten residual toward global mean (reduces banding)
+    global_mean = np.median(residual)
+    reconstructed = residual * 0.7 + global_mean * 0.3
+    for lap in laplacian:
+        reconstructed += lap
+    reconstructed = np.clip(reconstructed, 0, 1)
+
+    img_16 = (reconstructed * 65535).astype(np.uint16)
 
     try:
         import cv2
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 16))
+        clahe = cv2.createCLAHE(clipLimit=1.0, tileGridSize=(8, 16))
         img_16 = clahe.apply(img_16)
-        log.info("Applied WWE gamma=%.1f + CLAHE", WWE_GAMMA)
     except ImportError:
-        pass  # cv2 not available — skip CLAHE
+        pass
 
+    log.info("Applied WWE gamma=%.1f + MUSICA multi-scale enhancement", WWE_GAMMA)
     img_8bit = (img_16 >> 8).astype(np.uint8)
 
     # ── Crop to standard output size ───────────────────────────────
