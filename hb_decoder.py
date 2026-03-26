@@ -1308,25 +1308,47 @@ def reconstruct_image(
                 np.where(nans)[0], np.where(~nans)[0], active_gains[~nans]
             )
 
-    frame_trend = uniform_filter1d(active_gains, size=11)
-    with np.errstate(divide='ignore', invalid='ignore'):
-        frame_corr = np.where(
-            frame_gains > min_signal, frame_trend / frame_gains, 1.0
-        )
-    frame_corr = np.clip(frame_corr, 0.8, 1.25)
+    def _apply_frame_eq(gains_arr, smooth_sz, clip_lo, clip_hi):
+        """Apply one pass of frame gain equalization."""
+        ag = gains_arr.copy()
+        ag[ag < min_signal] = np.nan
+        vm = ~np.isnan(ag)
+        if not np.any(vm):
+            return
+        fv = int(np.argmax(vm))
+        lv = len(ag) - 1 - int(np.argmax(vm[::-1]))
+        ag[:fv] = ag[fv]
+        ag[lv + 1:] = ag[lv]
+        nans = np.isnan(ag)
+        if np.any(nans):
+            ag[nans] = np.interp(
+                np.where(nans)[0], np.where(~nans)[0], ag[~nans]
+            )
+        trend = uniform_filter1d(ag, size=smooth_sz)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            fc = np.where(gains_arr > min_signal, trend / gains_arr, 1.0)
+        fc = np.clip(fc, clip_lo, clip_hi)
+        for c in range(width):
+            ff = c / COLS_PER_FRAME
+            f0 = int(ff)
+            f1 = min(f0 + 1, num_frames - 1)
+            t = ff - f0
+            img_f[:, c] *= fc[f0] * (1 - t) + fc[f1] * t
 
-    # Interpolate per-frame correction to per-column
-    col_frame_corr = np.ones(width, dtype=np.float32)
-    for c in range(width):
-        ff = c / COLS_PER_FRAME
-        f0 = int(ff)
-        f1 = min(f0 + 1, num_frames - 1)
-        t = ff - f0
-        col_frame_corr[c] = frame_corr[f0] * (1 - t) + frame_corr[f1] * t
+    # Pass 1: broad equalization (11-frame smooth) — removes large-scale steps
+    _apply_frame_eq(frame_gains, smooth_sz=11, clip_lo=0.80, clip_hi=1.25)
 
-    img_f *= col_frame_corr[np.newaxis, :]
-    log.info("Frame equalization: %d frames, correction range %.3f-%.3f",
-             num_frames, col_frame_corr.min(), col_frame_corr.max())
+    # Pass 2: narrow equalization (3-frame smooth) — catches remaining outliers
+    col_profile2 = np.median(img_f[stable_lo:stable_hi, :], axis=0)
+    frame_gains2 = np.zeros(num_frames)
+    for fi in range(num_frames):
+        c0 = int(fi * COLS_PER_FRAME)
+        c1 = min(int((fi + 1) * COLS_PER_FRAME), width)
+        if c0 < width and c1 > c0:
+            frame_gains2[fi] = np.median(col_profile2[c0:c1])
+    _apply_frame_eq(frame_gains2, smooth_sz=3, clip_lo=0.92, clip_hi=1.08)
+
+    log.info("Frame equalization: %d frames (two-pass)", num_frames)
 
     # ── Per-column flat-field (residual) ─────────────────────────────
     #   After frame equalization, remove any remaining per-column gain
