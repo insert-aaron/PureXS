@@ -1746,11 +1746,27 @@ class SironaLiveClient:
                     # embedded 0x1002 session header.  Find and skip it so
                     # the buffer contains only raw scan data.
                     if chunk_count <= 2:
-                        # Look for 0x1002 header signature in first chunks
-                        sig = b'\x10\x02\x07\x2d\x07\xd0'
-                        pos = data.find(sig)
+                        # Look for 0x1002 header signature in first chunks.
+                        # This frame contains calibration data (SGFHeader,
+                        # DieWidthPixel, DarkCurrentRows, etc.) — save it
+                        # before stripping.
+                        sig_1002 = b'\x10\x02\x07\x2d\x07\xd0'
+                        pos = data.find(sig_1002)
                         if pos >= 0:
-                            # Skip the 20-byte session header
+                            # Save the full 0x1002 frame for calibration
+                            calib_data = data[pos:]
+                            try:
+                                calib_path = LOG_DIR / "last_scan_calibration.bin"
+                                with open(calib_path, "wb") as cf:
+                                    cf.write(calib_data)
+                                log.info(
+                                    "Saved 0x1002 calibration frame: %s (%d bytes)",
+                                    calib_path, len(calib_data),
+                                )
+                            except Exception as exc:
+                                log.warning("Failed to save calibration: %s", exc)
+
+                            # Strip the 20-byte session header for pixel stream
                             data = data[pos + SESSION_HEADER_SIZE:]
                             log.info(
                                 "Scan chunk %d: stripped 0x1002 header at "
