@@ -242,6 +242,145 @@ class PureXSDICOM:
 
         return str(dcm_path)
 
+    def export_image(
+        self,
+        patient: dict[str, Any],
+        image: Any,
+        kv_peak: float,
+        output_dir: str | Path,
+        exposure_time_ms: int = 4000,
+    ) -> str:
+        """Export a processed PIL Image (8-bit grayscale) as DICOM.
+
+        This is the preferred method when using `reconstruct_image()` which
+        returns an 8-bit PIL Image with all corrections applied (dark, frame
+        equalization, MUSICA, crop).
+
+        Args:
+            patient: Dict with keys: first, last, dob (MM/DD/YYYY), id, exam, set.
+            image: PIL Image (mode "L", 8-bit grayscale).
+            kv_peak: Peak kV recorded during the exposure.
+            output_dir: Directory to write the .dcm file into.
+            exposure_time_ms: Nominal exposure duration in milliseconds.
+
+        Returns:
+            Absolute path to the saved .dcm file.
+        """
+        if not HAS_PYDICOM:
+            raise RuntimeError(
+                "pydicom is required for DICOM export. "
+                "Install with: pip install pydicom"
+            )
+        if not patient.get("set"):
+            raise RuntimeError("Patient context not set — cannot export DICOM")
+
+        pixel_array = np.array(image)
+        if pixel_array.ndim != 2:
+            raise RuntimeError(f"Expected 2D grayscale image, got shape {pixel_array.shape}")
+
+        rows, cols = pixel_array.shape
+        bits = 16 if pixel_array.dtype == np.uint16 else 8
+
+        log.info(
+            "DICOM export (processed): patient=%s^%s  %dx%d %d-bit  kV=%.1f",
+            patient["last"], patient["first"], cols, rows, bits, kv_peak,
+        )
+
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        dob_nodash = patient["dob"].replace("/", "")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{patient['last']}_{patient['first']}_{dob_nodash}_{ts}.dcm"
+        dcm_path = output_dir / filename
+
+        file_meta = pydicom.dataset.FileMetaDataset()
+        file_meta.FileMetaInformationVersion = b"\x00\x01"
+        file_meta.MediaStorageSOPClassUID = DX_SOP_CLASS_UID
+        file_meta.MediaStorageSOPInstanceUID = generate_uid()
+        file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
+        file_meta.ImplementationClassUID = PUREXS_IMPLEMENTATION_CLASS_UID
+        file_meta.ImplementationVersionName = PUREXS_IMPLEMENTATION_VERSION
+
+        ds = FileDataset(
+            str(dcm_path), {}, file_meta=file_meta, preamble=b"\x00" * 128
+        )
+
+        now = datetime.now()
+
+        # Patient Module
+        ds.PatientName = f"{patient['last']}^{patient['first']}"
+        ds.PatientID = patient.get("id", "")
+        ds.PatientBirthDate = self._dob_to_dicom(patient.get("dob", ""))
+        ds.PatientSex = ""
+
+        # Study / Series
+        ds.StudyInstanceUID = generate_uid()
+        ds.StudyDate = now.strftime("%Y%m%d")
+        ds.StudyTime = now.strftime("%H%M%S")
+        ds.ReferringPhysicianName = ""
+        ds.StudyID = patient.get("id", "")
+        ds.AccessionNumber = ""
+        ds.Modality = "PX"
+        ds.SeriesInstanceUID = generate_uid()
+        ds.SeriesNumber = 1
+        ds.SeriesDescription = patient.get("exam", "Panoramic")
+
+        # Equipment
+        ds.Manufacturer = "Dentsply Sirona"
+        ds.InstitutionName = ""
+        ds.ManufacturerModelName = "Orthophos XG"
+        ds.SoftwareVersions = "PureXS 1.0"
+
+        # Image
+        ds.InstanceNumber = 1
+        ds.ContentDate = now.strftime("%Y%m%d")
+        ds.ContentTime = now.strftime("%H%M%S")
+        ds.ImageType = ["DERIVED", "PRIMARY"]
+        ds.AcquisitionDate = now.strftime("%Y%m%d")
+        ds.AcquisitionTime = now.strftime("%H%M%S")
+
+        # Pixel Module
+        ds.SamplesPerPixel = 1
+        ds.PhotometricInterpretation = "MONOCHROME1"  # bone=bright convention
+        ds.Rows = rows
+        ds.Columns = cols
+        ds.BitsAllocated = bits
+        ds.BitsStored = bits
+        ds.HighBit = bits - 1
+        ds.PixelRepresentation = 0
+        ds.PixelData = pixel_array.astype(f"<u{bits // 8}").tobytes()
+
+        # Window/Level for 8-bit display
+        if bits == 8:
+            ds.WindowCenter = "128"
+            ds.WindowWidth = "256"
+        else:
+            ds.WindowCenter = "32768"
+            ds.WindowWidth = "65536"
+
+        # DX-specific
+        ds.KVP = f"{kv_peak:.1f}"
+        ds.ExposureTime = str(exposure_time_ms)
+        ds.BodyPartExamined = "JAW"
+        ds.ViewPosition = "PA"
+        ds.DistanceSourceToDetector = "500"
+        ds.DistanceSourceToPatient = "400"
+
+        # SOP Common
+        ds.SOPClassUID = DX_SOP_CLASS_UID
+        ds.SOPInstanceUID = file_meta.MediaStorageSOPInstanceUID
+        ds.SpecificCharacterSet = "ISO_IR 100"
+
+        try:
+            ds.save_as(str(dcm_path), enforce_file_format=True)
+        except TypeError:
+            ds.save_as(str(dcm_path), write_like_original=False)
+
+        log.info("DICOM saved: %s (%d bytes)", dcm_path, dcm_path.stat().st_size)
+        self._verify(dcm_path, rows, cols)
+        return str(dcm_path)
+
     # ── Helpers ──────────────────────────────────────────────────────────
 
     @staticmethod
@@ -297,10 +436,11 @@ class PureXSDICOM:
             ds = pydicom.dcmread(str(dcm_path))
             assert ds.Rows == expected_rows, f"Rows mismatch: {ds.Rows} != {expected_rows}"
             assert ds.Columns == expected_cols, f"Cols mismatch: {ds.Columns} != {expected_cols}"
-            assert ds.BitsAllocated == 16
+            assert ds.BitsAllocated in (8, 16)
             assert ds.SamplesPerPixel == 1
             pixel_len = len(ds.PixelData)
-            expected_len = expected_rows * expected_cols * 2
+            bpp = ds.BitsAllocated // 8
+            expected_len = expected_rows * expected_cols * bpp
             assert pixel_len == expected_len, (
                 f"PixelData length {pixel_len} != expected {expected_len}"
             )
@@ -344,38 +484,64 @@ def main() -> int:
         "id": args.id, "exam": args.exam, "set": True,
     }
 
-    # Build mock scanline buffer
+    # Build image from source
     if args.scanlines == "test":
-        print("Using synthetic test scanlines (13 x 240px)")
+        print("Using synthetic test image (1280x2440)")
 
         class MockScanline:
             def __init__(self, sid: int, count: int = 240):
                 self.scanline_id = sid
                 self.pixel_count = count
-                # Simulate a gradient with some structure
                 base = np.linspace(500, 8000, count, dtype=np.uint16)
                 noise = np.random.randint(0, 200, count, dtype=np.uint16)
                 self.pixels = base + noise
 
         scanline_buffer = [MockScanline(0x40 + i) for i in range(13)]
+        exporter = PureXSDICOM()
+        dcm_path = exporter.export(patient, scanline_buffer, args.kv, args.outdir)
     else:
-        print(f"Loading scanlines from {args.scanlines} (not implemented — use 'test')")
-        return 1
+        # Load from raw scan buffer and run full processing pipeline
+        raw_path = Path(args.scanlines)
+        if not raw_path.exists():
+            print(f"ERROR: File not found: {raw_path}", file=sys.stderr)
+            return 1
 
-    exporter = PureXSDICOM()
-    dcm_path = exporter.export(patient, scanline_buffer, args.kv, args.outdir)
+        print(f"Loading raw scan: {raw_path} ({raw_path.stat().st_size} bytes)")
+
+        # Import the processing pipeline
+        try:
+            from hb_decoder import _extract_panoramic, reconstruct_image
+        except ImportError:
+            print("ERROR: hb_decoder.py not found in path", file=sys.stderr)
+            return 1
+
+        with open(raw_path, "rb") as f:
+            raw_data = f.read()
+        scanlines = _extract_panoramic(raw_data)
+        image = reconstruct_image(scanlines)
+
+        if image is None:
+            print("ERROR: Image reconstruction failed", file=sys.stderr)
+            return 1
+
+        print(f"Processed image: {image.size[0]}x{image.size[1]}")
+
+        exporter = PureXSDICOM()
+        dcm_path = exporter.export_image(patient, image, args.kv, args.outdir)
+
     print(f"\nDICOM exported: {dcm_path}")
 
     # Quick readback test
     ds = pydicom.dcmread(dcm_path)
-    print(f"  PatientName:    {ds.PatientName}")
-    print(f"  PatientID:      {ds.PatientID}")
+    print(f"  PatientName:      {ds.PatientName}")
+    print(f"  PatientID:        {ds.PatientID}")
     print(f"  PatientBirthDate: {ds.PatientBirthDate}")
-    print(f"  Modality:       {ds.Modality}")
-    print(f"  Image:          {ds.Columns}x{ds.Rows} {ds.BitsAllocated}-bit")
-    print(f"  KVP:            {ds.KVP}")
-    print(f"  BodyPart:       {ds.BodyPartExamined}")
-    print(f"  SOPClass:       {ds.SOPClassUID}")
+    print(f"  Modality:         {ds.Modality}")
+    print(f"  Image:            {ds.Columns}x{ds.Rows} {ds.BitsAllocated}-bit")
+    print(f"  Photometric:      {ds.PhotometricInterpretation}")
+    print(f"  KVP:              {ds.KVP}")
+    print(f"  BodyPart:         {ds.BodyPartExamined}")
+    print(f"  SOPClass:         {ds.SOPClassUID}")
 
     return 0
 
