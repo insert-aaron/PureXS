@@ -1,0 +1,5 @@
+# PureXS GUI + Direct TCP — no server dependencies
+customtkinter>=5.2.0
+Pillow>=10.0.0
+numpy>=1.24.0
+pydicom>=2.4.0

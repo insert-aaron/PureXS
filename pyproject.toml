@@ -1,0 +1,71 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "purexs"
+version = "0.1.0"
+description = "Open-source reimplementation of Sirona Sidexis dental imaging software (SiNet2/P2K protocol)"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [
+    { name = "PureXS contributors" },
+]
+keywords = ["dental", "imaging", "sidexis", "sirona", "sinet2", "p2k", "dicom"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Healthcare Industry",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "pydantic>=2.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+    "httpx>=0.27.0",       # for TestClient
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+]
+
+[project.scripts]
+purexs = "src.__main__:main"
+purexs-discover = "src.protocol.udp:_cli_discover"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+# ── pytest ────────────────────────────────────────────────────────────────────
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+asyncio_mode = "auto"
+
+# ── ruff ─────────────────────────────────────────────────────────────────────
+
+[tool.ruff]
+line-length = 99
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501"]
+
+# ── mypy ──────────────────────────────────────────────────────────────────────
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true

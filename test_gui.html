@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PureXS — Live Acquisition</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen p-6 font-mono">
+
+  <div class="max-w-5xl mx-auto space-y-5">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between">
+      <h1 class="text-xl font-bold tracking-wide">PureXS Live Acquisition</h1>
+      <span class="text-xs text-gray-500">mock device: 127.0.0.1:1999</span>
+    </div>
+
+    <!-- Status bar -->
+    <div class="flex items-center gap-4 text-sm">
+      <span id="ws-dot"
+            class="inline-block w-2.5 h-2.5 rounded-full bg-gray-600"></span>
+      <span id="ws-label" class="text-gray-400">Disconnected</span>
+      <span class="text-gray-600">|</span>
+      <span id="byte-count" class="text-gray-500">0 bytes received</span>
+      <span class="text-gray-600">|</span>
+      <span id="chunk-count" class="text-gray-500">0 blocks</span>
+    </div>
+
+    <!-- Controls -->
+    <div class="flex gap-3 flex-wrap">
+      <input id="device-id"
+             type="text"
+             placeholder="Device ID (MAC or id from /devices)"
+             value="DE:AD:BE:EF:00:01"
+             class="bg-gray-800 border border-gray-700 rounded px-3 py-2
+                    text-sm flex-1 min-w-48 focus:outline-none
+                    focus:border-blue-500" />
+
+      <select id="program"
+              class="bg-gray-800 border border-gray-700 rounded px-3 py-2
+                     text-sm focus:outline-none focus:border-blue-500">
+        <option value="PANORAMIC">PANORAMIC</option>
+        <option value="CEPH_LAT">CEPH_LAT</option>
+        <option value="CEPH_PA">CEPH_PA</option>
+        <option value="BITEWING">BITEWING</option>
+      </select>
+
+      <button id="btn-discover"
+              onclick="discoverDevices()"
+              class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded text-sm
+                     transition-colors">
+        Discover
+      </button>
+
+      <button id="btn-connect"
+              onclick="startAcquisition()"
+              class="bg-blue-600 hover:bg-blue-500 active:bg-blue-700
+                     px-5 py-2 rounded text-sm font-semibold transition-colors">
+        Connect &amp; Acquire
+      </button>
+
+      <button id="btn-disconnect"
+              onclick="stopAcquisition()"
+              disabled
+              class="bg-red-700 hover:bg-red-600 px-4 py-2 rounded text-sm
+                     transition-colors disabled:opacity-40
+                     disabled:cursor-not-allowed">
+        Disconnect
+      </button>
+    </div>
+
+    <!-- Device list (populated by Discover) -->
+    <div id="device-list" class="hidden">
+      <p class="text-xs text-gray-500 mb-1">Discovered devices — click to select:</p>
+      <div id="device-list-items" class="flex flex-wrap gap-2"></div>
+    </div>
+
+    <!-- Canvas -->
+    <div class="relative bg-gray-900 rounded-xl overflow-hidden border border-gray-800">
+      <canvas id="live-canvas"
+              class="block w-full"
+              style="image-rendering: pixelated; min-height: 200px;"></canvas>
+
+      <!-- Overlay when idle -->
+      <div id="canvas-idle"
+           class="absolute inset-0 flex items-center justify-center
+                  text-gray-600 text-sm select-none pointer-events-none">
+        Waiting for image data…
+      </div>
+    </div>
+
+    <!-- Log -->
+    <div>
+      <p class="text-xs text-gray-600 mb-1">Event log</p>
+      <div id="log"
+           class="bg-gray-900 border border-gray-800 rounded p-3 h-40
+                  overflow-y-auto text-xs text-gray-400 space-y-0.5 font-mono">
+      </div>
+    </div>
+
+  </div><!-- /max-w -->
+
+  <script>
+    // ── state ──────────────────────────────────────────────────────────────────
+    let ws = null;
+    let totalBytes = 0;
+    let chunkCount = 0;
+    /** @type {Uint8Array[]} */
+    let rawChunks = [];
+    /** Image dimensions from the first successfully-rendered frame, if known */
+    let imgWidth = 0;
+    let imgHeight = 0;
+
+    // ── logging ────────────────────────────────────────────────────────────────
+    function logMsg(text, cls = 'text-gray-400') {
+      const el = document.getElementById('log');
+      const ts = new Date().toISOString().slice(11, 23);
+      const line = document.createElement('div');
+      line.className = cls;
+      line.textContent = `[${ts}] ${text}`;
+      el.appendChild(line);
+      el.scrollTop = el.scrollHeight;
+    }
+
+    // ── status helpers ─────────────────────────────────────────────────────────
+    function setStatus(state) {
+      const dot   = document.getElementById('ws-dot');
+      const label = document.getElementById('ws-label');
+      const colors = {
+        disconnected: ['bg-gray-600',  'Disconnected'],
+        connecting:   ['bg-yellow-500','Connecting…'],
+        connected:    ['bg-green-500', 'Connected'],
+        error:        ['bg-red-500',   'Error'],
+      };
+      const [cls, text] = colors[state] ?? colors.disconnected;
+      dot.className   = `inline-block w-2.5 h-2.5 rounded-full ${cls}`;
+      label.textContent = text;
+    }
+
+    function updateCounters() {
+      document.getElementById('byte-count').textContent =
+        `${totalBytes.toLocaleString()} bytes received`;
+      document.getElementById('chunk-count').textContent =
+        `${chunkCount} block${chunkCount === 1 ? '' : 's'}`;
+    }
+
+    // ── device discovery ───────────────────────────────────────────────────────
+    async function discoverDevices() {
+      logMsg('GET /devices …');
+      try {
+        const resp = await fetch('/devices');
+        if (!resp.ok) { logMsg(`GET /devices → ${resp.status}`, 'text-red-400'); return; }
+        /** @type {Array<{id:string, display_name:string, ip:string, port:number, mac:string, connected:boolean, serial:string}>} */
+        const devices = await resp.json();
+        logMsg(`Found ${devices.length} device(s)`, 'text-green-400');
+
+        const container = document.getElementById('device-list-items');
+        container.innerHTML = '';
+        devices.forEach(dev => {
+          const btn = document.createElement('button');
+          btn.className =
+            'bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded ' +
+            'px-3 py-1.5 text-xs transition-colors text-left';
+          btn.innerHTML =
+            `<span class="font-semibold">${dev.display_name}</span> ` +
+            `<span class="text-gray-500">${dev.ip}:${dev.port}</span><br>` +
+            `<span class="text-gray-600">${dev.mac}</span>` +
+            (dev.connected ? ' <span class="text-green-400">●</span>' : '');
+          btn.onclick = () => {
+            document.getElementById('device-id').value = dev.id;
+            logMsg(`Selected device: ${dev.id} (${dev.display_name})`);
+          };
+          container.appendChild(btn);
+        });
+
+        document.getElementById('device-list').classList.remove('hidden');
+      } catch (e) {
+        logMsg(`Discover error: ${e}`, 'text-red-400');
+      }
+    }
+
+    // ── acquisition ────────────────────────────────────────────────────────────
+    async function startAcquisition() {
+      const deviceId = document.getElementById('device-id').value.trim();
+      const program  = document.getElementById('program').value;
+      if (!deviceId) { logMsg('No device ID entered.', 'text-yellow-400'); return; }
+
+      setStatus('connecting');
+      resetCanvas();
+      totalBytes = 0; chunkCount = 0; rawChunks = [];
+      updateCounters();
+
+      // 1. Trigger acquisition via REST
+      logMsg(`POST /devices/${deviceId}/acquire/${program} …`);
+      try {
+        const resp = await fetch(`/devices/${deviceId}/acquire/${program}`, {
+          method: 'POST',
+        });
+        const body = await resp.json();
+        if (!resp.ok) {
+          logMsg(`Acquire failed ${resp.status}: ${JSON.stringify(body)}`, 'text-red-400');
+          setStatus('error');
+          return;
+        }
+        logMsg(`Acquisition triggered: ${JSON.stringify(body)}`, 'text-green-400');
+      } catch (e) {
+        logMsg(`POST error: ${e}`, 'text-red-400');
+        setStatus('error');
+        return;
+      }
+
+      // 2. Open WebSocket for live stream
+      const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+      const wsUrl   = `${wsProto}://${location.host}/devices/${deviceId}/live`;
+      logMsg(`WS connect → ${wsUrl}`);
+
+      ws = new WebSocket(wsUrl);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        setStatus('connected');
+        document.getElementById('btn-connect').disabled = true;
+        document.getElementById('btn-disconnect').disabled = false;
+        logMsg('WebSocket open', 'text-green-400');
+      };
+
+      ws.onmessage = evt => {
+        const buf = evt.data;
+        totalBytes += buf.byteLength;
+        chunkCount++;
+        updateCounters();
+        rawChunks.push(new Uint8Array(buf));
+        renderChunk(buf);
+      };
+
+      ws.onclose = evt => {
+        setStatus('disconnected');
+        document.getElementById('btn-connect').disabled = false;
+        document.getElementById('btn-disconnect').disabled = true;
+        logMsg(`WebSocket closed (code=${evt.code})`, 'text-gray-500');
+        ws = null;
+      };
+
+      ws.onerror = () => {
+        setStatus('error');
+        logMsg('WebSocket error', 'text-red-400');
+      };
+    }
+
+    function stopAcquisition() {
+      if (ws) { ws.close(1000, 'user disconnect'); }
+    }
+
+    // ── canvas rendering ───────────────────────────────────────────────────────
+
+    function resetCanvas() {
+      const canvas = document.getElementById('live-canvas');
+      const ctx    = canvas.getContext('2d');
+      canvas.width  = 320;
+      canvas.height = 100;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      document.getElementById('canvas-idle').style.display = '';
+      imgWidth = 0; imgHeight = 0;
+    }
+
+    /**
+     * Render a raw-pixel buffer onto the canvas.
+     *
+     * Incoming data is raw 16-bit grayscale, little-endian.
+     * We convert to 8-bit (high byte only) and draw RGBA.
+     *
+     * For intermediate blocks we render them as a horizontal strip at the
+     * bottom of the accumulating image.  For the final full image (which is
+     * also yielded by live_images()) we re-render the whole thing.
+     *
+     * @param {ArrayBuffer} buf
+     */
+    function renderChunk(buf) {
+      const canvas = document.getElementById('live-canvas');
+      const ctx    = canvas.getContext('2d');
+
+      // Hide idle overlay on first data
+      document.getElementById('canvas-idle').style.display = 'none';
+
+      const u16    = new Uint16Array(buf);
+      const npix   = u16.length;
+      if (npix === 0) return;
+
+      // Known ORTHOPHOS XG panoramic dimensions: 2440 × 1292
+      // Detect full-image chunks by matching pixel count.
+      const KNOWN_DIMS = [
+        [2440, 1292],   // DX41 panoramic
+        [1024,  512],   // fallback test size
+      ];
+      let w = 0, h = 0;
+      for (const [kw, kh] of KNOWN_DIMS) {
+        if (npix === kw * kh) { w = kw; h = kh; break; }
+      }
+      if (!w) {
+        // Unknown size — treat as a 512-wide strip
+        w = Math.min(npix, 512);
+        h = Math.max(1, Math.ceil(npix / w));
+      }
+
+      // Expand canvas if needed
+      if (canvas.width !== w || canvas.height < h) {
+        // For the full image, set exact size; for strips, grow height.
+        const newH = (npix === w * h) ? h : Math.max(canvas.height, h);
+        if (canvas.width !== w || canvas.height !== newH) {
+          canvas.width  = w;
+          canvas.height = newH;
+        }
+      }
+
+      // Build pixel data: 16-bit LE → 8-bit grey → RGBA
+      const imgData = ctx.createImageData(w, h);
+      const px      = imgData.data;
+      for (let i = 0; i < Math.min(npix, w * h); i++) {
+        const grey = u16[i] >> 8;   // high byte of 16-bit sample
+        px[i * 4]     = grey;
+        px[i * 4 + 1] = grey;
+        px[i * 4 + 2] = grey;
+        px[i * 4 + 3] = 255;
+      }
+
+      // Draw at bottom for strips, at top for full image
+      const yOff = (npix < canvas.width * canvas.height)
+        ? canvas.height - h   // strip: append at bottom
+        : 0;                  // full image: overwrite from top
+      ctx.putImageData(imgData, 0, yOff);
+    }
+
+    // ── init ───────────────────────────────────────────────────────────────────
+    resetCanvas();
+    logMsg('PureXS live acquisition GUI ready.');
+    logMsg('Click "Discover" to list devices, or enter a device ID and click "Connect & Acquire".');
+  </script>
+</body>
+</html>

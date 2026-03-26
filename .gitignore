@@ -1,0 +1,52 @@
+.DS_Store
+__pycache__/
+bin/
+obj/
+publish/
+releases-staging/
+*.user
+*.suo
+.vs/
+
+# .NET runtime DLLs (shipped with PureXS.exe, not source)
+*.dll
+*.exe
+*.pdb
+*.deps.json
+*.runtimeconfig.json
+clr*.dll
+host*.dll
+msquic.dll
+vcruntime*.dll
+wpfgfx*.dll
+createdump.exe
+mscor*.dll
+netstandard.dll
+PenImc_cor3.dll
+PresentationNative_cor3.dll
+D3DCompiler_47_cor3.dll
+
+# Locale resource directories
+cs/
+de/
+es/
+fr/
+it/
+ja/
+ko/
+pl/
+pt-BR/
+ru/
+tr/
+zh-Hans/
+zh-Hant/
+x86/
+
+# Output images
+*.png
+*.tiff
+*.tif
+
+# Large data files
+*.bin
+*.zip

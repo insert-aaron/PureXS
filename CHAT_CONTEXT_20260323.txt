@@ -1,0 +1,207 @@
+═══════════════════════════════════════════════════════════════════════════════
+  PureXS Development Session — 2026-03-23 (Windows)
+  Context export for macOS continuation
+═══════════════════════════════════════════════════════════════════════════════
+
+PROJECT: PureXS — Sirona ORTHOPHOS XG direct control GUI (CustomTkinter/Python)
+PLATFORM: Windows 10 Pro, Python 3.12
+REPO PATH: C:\PureXS (not a git repo)
+
+───────────────────────────────────────────────────────────────────────────────
+  WHAT WAS BUILT THIS SESSION
+───────────────────────────────────────────────────────────────────────────────
+
+■ Phase 1 — Static Patient Loader (PureChart integration)
+  - Created purechart.py with PureChartPatient model + PureChartPatientLoader
+  - On app startup, calls PureChart xray-patient-search API
+  - Populates a ComboBox in the Patient panel with results
+  - Graceful failure if API unreachable — app still loads
+
+■ Phase 2 — Search-as-you-type
+  - Added CTkEntry for typing patient name
+  - 400ms debounce before firing API search
+  - Results populate dropdown below the search entry
+  - Minimum 2 characters required before searching
+  - Background thread prevents UI blocking
+
+■ Phase 3 — Auto-upload X-ray to PureChart
+  - Created PureChartUploader class in purechart.py
+  - After expose completes → auto-uploads panoramic PNG to patient's chart
+  - Uses upload-xray Supabase edge function
+  - Background thread for upload, Toast notifications for result
+  - Stores _last_pano_path when PNG is saved for reliable file reference
+
+■ Phase 4 — Exam type mapping (built into Phase 3)
+  - EXAM_TYPE_MAP in purechart.py maps PureXS exam types to PureChart types:
+    Panoramic → panoramic_xray, Bitewing* → bitewings, Periapical → periapical
+
+■ Phase 5 — Upload Status/Retry UI
+  - Upload progress frame (hidden until first upload)
+  - Indeterminate progress bar during upload
+  - Green bar + byte count on success
+  - Red error text + Retry button on failure
+  - Retry re-fires the exact same upload from stored args
+
+■ Auto-Discovery — Sirona device finding
+  - TCP port scan on local subnet (port 12837) — finds Sirona in ~1 second
+  - 50 parallel threads, 0.3s timeout per host
+  - Falls back to hardcoded SIRONA_IP if scan finds nothing
+  - SIRONA_IP env var overrides discovery entirely
+  - UDP discovery also available (src/protocol/udp.py) but Sirona doesn't
+    respond to UDP probes on this network
+
+■ Minor: Updated scan-complete status text with patience reminder
+
+───────────────────────────────────────────────────────────────────────────────
+  FILES MODIFIED
+───────────────────────────────────────────────────────────────────────────────
+
+purexs_gui.py  — Main GUI application
+  - Added imports: purechart (Phase 1-3), UDPDiscovery, concurrent.futures
+  - Added state vars: _purechart_patients, _selected_purechart, _facility_token,
+    _purechart_loader, _purechart_uploader, _last_pano_path, _last_upload_args,
+    _purechart_searching
+  - Added UI: PureChart search entry + results dropdown + upload status frame
+    with progress bar + retry button (in Patient panel)
+  - Added methods:
+    Phase 1+2: _phase1_load_patients, _on_purechart_search_typed,
+      _purechart_run_search, _purechart_search_bg, _purechart_populate_combo,
+      _on_purechart_patient_selected
+    Phase 3: _phase3_upload_to_purechart, _phase3_upload_bg,
+      _phase3_upload_done, _phase3_upload_error
+    Phase 5: _phase5_show_uploading, _phase5_show_success,
+      _phase5_show_failure, _on_upload_retry
+    Discovery: _discover_sirona_tcp (TCP subnet scan)
+  - Modified: _start_hb_monitor_direct (auto-discovery before connect),
+    _on_direct_connected (shows discovered IP:port),
+    _save_patient_outputs (stores _last_pano_path)
+
+purechart.py  — NEW FILE — PureChart API integration
+  - PureChartPatient dataclass (id, first_name, last_name, mrn, dob, etc.)
+  - PureChartPatientLoader — POST to xray-patient-search with {q: query}
+  - PureChartUploader — POST to upload-xray with base64-encoded file
+  - UploadResult dataclass
+  - EXAM_TYPE_MAP dict
+  - _CONTENT_TYPE_MAP for file extension → MIME type
+
+───────────────────────────────────────────────────────────────────────────────
+  API CONFIGURATION
+───────────────────────────────────────────────────────────────────────────────
+
+PureChart Supabase Project: whzohbzqhqaohpohmqah
+
+Search endpoint:
+  POST https://whzohbzqhqaohpohmqah.supabase.co/functions/v1/xray-patient-search
+  Body: {"q": "search term"}
+  Returns: {"patients": [{id, first_name, last_name, medical_record_number, dob, ...}]}
+
+Upload endpoint:
+  POST https://whzohbzqhqaohpohmqah.supabase.co/functions/v1/upload-xray
+  Body: {patientId, base64Data, contentType, type, title, originalFilename}
+  Returns: {success, fileUrl, attachmentId, patientId, filename, type, size}
+
+Headers (both endpoints):
+  Content-Type: application/json
+  Authorization: Bearer <ANON_KEY>
+  apikey: <ANON_KEY>
+  x-api-key: <FACILITY_TOKEN>
+
+Current ANON_KEY (updated 2026-03-23 — old key was rotated):
+  eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Indoem9oYnpxaHFhb2hwb2htcWFoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkyNTUzNzQsImV4cCI6MjA3NDgzMTM3NH0.p_BZ1XaPIihSdo-41YKbr4ZmS-NZRfGr9AerEEgpmcc
+
+Austin facility token:
+  43bd5ee3a662f5cbf468bfc6402eb56ec685fb315461114275b4204402a2cf17
+
+Facility tokens are per-location, provided by Son Tran (stran5000@gmail.com).
+Token is hardcoded as default in purexs_gui.py, overridable via
+PURECHART_FACILITY_TOKEN env var.
+
+───────────────────────────────────────────────────────────────────────────────
+  SEARCH API NOTES (from Son Tran's email)
+───────────────────────────────────────────────────────────────────────────────
+
+- Single field "q" auto-detects search type:
+  Name, Phone, DOB (MM/DD/YYYY or YYYY-MM-DD or MMDDYYYY), MRN, UUID
+- Returns up to 15 patients
+- profile_picture_url is a signed URL (expires, don't cache)
+- Phone numbers in E.164 format (+15124207031)
+- Token tied to specific clinic location
+
+Upload type values:
+  xrays, panoramic_xray, bitewings, periapical, ct_scans, photos,
+  documents, receipts, other
+
+Allowed contentType:
+  image/png, image/jpeg, image/tiff, image/webp, image/heic, image/bmp,
+  image/gif, application/pdf, application/dicom
+
+───────────────────────────────────────────────────────────────────────────────
+  SIRONA CONNECTION
+───────────────────────────────────────────────────────────────────────────────
+
+Current machine: 192.168.139.10
+Sirona ORTHOPHOS XG: 192.168.139.170:12837
+
+Protocol: SiNet2 / P2K (proprietary binary, reverse-engineered)
+  - UDP discovery on port 1999 (broadcast probe) — implemented but Sirona
+    doesn't respond to it on this network
+  - TCP sessions on port 12837 (heartbeat, expose, scanline data)
+
+Auto-discovery approach:
+  1. TCP port scan on local subnet, port 12837, 50 parallel threads
+  2. First host that accepts connection = Sirona
+  3. Fallback to SIRONA_IP env var or hardcoded 192.168.139.170
+
+Key files for protocol:
+  src/protocol/udp.py      — UDP discovery (async + sync)
+  src/protocol/tcp.py      — TCP framing
+  src/protocol/packets.py  — Packet encoding/decoding
+  src/protocol/constants.py — Wire constants
+  src/core/discovery.py    — High-level discovery service
+  hb_decoder.py            — SironaLiveClient (heartbeat, kV, scanlines)
+  docs/protocol.md         — Full protocol reference
+
+───────────────────────────────────────────────────────────────────────────────
+  KNOWN ISSUES / TODO FOR macOS
+───────────────────────────────────────────────────────────────────────────────
+
+1. Anon key was rotated — the new one (above) is embedded in purechart.py.
+   If it stops working again, get updated key from Supabase dashboard
+   (Settings > API > Project API keys > anon public).
+
+2. Facility token auto-resolution by GPS was mentioned but not implemented.
+   Currently hardcoded per facility. May need a separate endpoint or
+   lookup mechanism in the future.
+
+3. UDP discovery doesn't find the Sirona on this network. TCP scan works.
+   On macOS, verify firewall allows outbound TCP to port 12837.
+
+4. Upload hasn't been tested end-to-end (API returns 401 without valid
+   facility token for upload endpoint — search works with Austin token).
+
+5. CustomTkinter on macOS: may need brew install python-tk@3.12 or similar.
+   Test appearance mode and DWM transparency code (Windows-specific).
+
+6. The scan-complete status message was updated with a patience reminder —
+   may want to refine wording.
+
+7. All Phase code is marked with # PHASE N comments and wrapped in
+   #region/#endregion blocks for easy identification.
+
+───────────────────────────────────────────────────────────────────────────────
+  ENVIRONMENT VARIABLES
+───────────────────────────────────────────────────────────────────────────────
+
+PURECHART_FACILITY_TOKEN  — PureChart facility token (default: Austin token)
+SIRONA_IP                 — Override Sirona IP (skips auto-discovery)
+SIRONA_PORT               — Override Sirona TCP port (default: 12837)
+PUREXS_API                — PureXS REST API base URL (default: http://localhost:8000)
+
+───────────────────────────────────────────────────────────────────────────────
+  DEPENDENCIES
+───────────────────────────────────────────────────────────────────────────────
+
+customtkinter, pillow, requests, numpy
+Optional: pydicom (DICOM export), websocket-client
+
+═══════════════════════════════════════════════════════════════════════════════
