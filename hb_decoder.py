@@ -861,28 +861,29 @@ def _parse_telemetry_block(block: bytes | bytearray) -> dict:
     col = w(_TELEM_COL_WORD)
     kv  = w(_TELEM_KV_WORD)
 
-    adc_words = np.array(
-        [w(_TELEM_ADC_WORD_START + k) for k in range(_TELEM_ADC_WORD_COUNT)],
-        dtype=np.float32,
-    )
-
-    # Validity check: real ADC readings are typically in 0x0100–0x7FFF
-    # range and not all identical (not protocol filler bytes like 0x2020).
-    adc_min, adc_max = float(adc_words.min()), float(adc_words.max())
-    adc_valid = (
-        adc_max > 256
-        and adc_min < 60000
-        and (adc_max - adc_min) > 32  # some spread expected
-        and not all(adc_words[i] == adc_words[0] for i in range(len(adc_words)))
-    )
+    adc_vals = []
+    # Real 0x07xx formatted ADC readings are at specific byte positions:
+    for o in (2, 4, 6, 8, 12, 14, 16, 18, 22, 24, 26, 28, 40, 42, 44, 48, 50, 52):
+        if o + 1 < len(block):
+            v = (block[o] << 8) | block[o+1]
+            if 0 < v < 4000:
+                adc_vals.append(v)
+    
+    if adc_vals:
+        adc_words = np.array(adc_vals, dtype=np.float32)
+        mean, std = float(adc_words.mean()), float(adc_words.std())
+        valid = (len(adc_vals) > 5) and (std < 500) and (200 < mean < 3500)
+    else:
+        adc_words = np.zeros(21, dtype=np.float32)
+        mean, std, valid = 0.0, 0.0, False
 
     return {
         "col":       col,
         "kv":        kv,
         "adc":       adc_words,
-        "adc_mean":  float(adc_words.mean()),
-        "adc_std":   float(adc_words.std()),
-        "adc_valid": adc_valid,
+        "adc_mean":  mean,
+        "adc_std":   std,
+        "adc_valid": valid,
     }
 
 
@@ -944,12 +945,6 @@ def _calibration_driven_fill(
                         TELEM_PIXELS, dtype=np.float32)
     predicted = val_top * (1.0 - t_arr) + val_bot * t_arr
 
-    # ── 3. Flat-field shape warp ─ DISABLED ─────────────────────────────
-    #
-    # Prerequisites before re-enabling:
-    #   a) A *fresh* flat-field capture (flat_field_raw.bin is outdated —
-    #      detector gain drifts over time so the old file adds noise here).
-    #   b) Confirmed ADC word layout (diagnostic shows words 7-27 are
     #      near-constant across columns, suggesting they are NOT live ADC
     #      light-reference readings — the real layout is still TBD).
     #
