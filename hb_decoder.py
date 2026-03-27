@@ -933,7 +933,9 @@ def _calibration_driven_fill(
         return None  # no anchor — fall back to interpolation
 
     anchor_above = float(np.mean(pixels_above)) if pixels_above else None
-    anchor_below = float(np.mean(pixels_below)) if pixels_below else None
+    anchor_below = float(np.mean(pixels_below)) if pixels_below is not None else (anchor_above or 0.0)
+
+
 
     # ── 2. Build baseline prediction from linear interpolation ───────────
     #   Even without the flat-field we can produce a ramp; the flat-field
@@ -1316,25 +1318,26 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> tuple[list[Scan
     )
 
     # ── 5b. 2D telemetry repair ──────────────────────────────────────────
-    #   The 1D repair (step 3) filled overwritten pixels with a noisy
-    #   linear ramp.  Now that we have the full 2D image we can do much
-    #   better: for each repaired 36-pixel block, find a DONOR column
-    #   from a different frame group that has REAL data at those exact
-    #   rows (the telemetry sits at different rows in each group).
-    #   Brightness-match the donor to the local column using the
-    #   flanking rows (which have real data in both columns).
+    #   The 1D repair (step 3) filled overwritten pixels with flat-field physics.
+    #   Now we replace the underlying missing jaw structure by finding a DONOR 
+    #   column from a different frame group that has REAL anatomy at those rows.
+    #   We rigorously avoid any donor columns that have overlapping telemetry 
+    #   within the affected row + FLANK range, preventing horizontal smearing!
     TELEM_SIZE = 72
     TELEM_PIXELS = TELEM_SIZE // 2  # 36 pixels per block
     FLANK = 8  # rows above/below repair zone for brightness matching
 
-    # Build set of repaired positions for donor lookup
+    # Build exhaustive set of all repaired pixel regions (including flanks)
     repaired_positions: set[tuple[int, int]] = set()
     for byte_off in repaired_byte_offsets:
         pixel_off = byte_off // 2
         col = pixel_off // img_height
         row = pixel_off % img_height
         if 0 <= col < img_width:
-            repaired_positions.add((col, row))
+            r_start = max(0, row - FLANK)
+            r_end = min(img_height, row + TELEM_PIXELS + FLANK)
+            for r in range(r_start, r_end):
+                repaired_positions.add((col, r))
 
     MAX_DONOR_SEARCH = 260  # must span at least one full 248-col group
 
@@ -1349,24 +1352,36 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> tuple[list[Scan
         if row_end <= row or row < FLANK or row_end + FLANK > img_height:
             continue
 
-        # Find nearest donor columns (different group = no repair at this row)
-        donor_left = donor_right = -1
-        for d in range(1, MAX_DONOR_SEARCH + 1):
+        donor_left = -1
+        donor_right = -1
+
+        # Find clean donor columns with NO repairs in the required vertical band
+        for d in range(1, MAX_DONOR_SEARCH):
             if donor_left < 0 and col - d >= 0:
-                if (col - d, row) not in repaired_positions:
+                is_clean = True
+                for r in range(row - FLANK, row_end + FLANK):
+                    if (col - d, r) in repaired_positions:
+                        is_clean = False
+                        break
+                if is_clean:
                     donor_left = col - d
+                    
             if donor_right < 0 and col + d < img_width:
-                if (col + d, row) not in repaired_positions:
+                is_clean = True
+                for r in range(row - FLANK, row_end + FLANK):
+                    if (col + d, r) in repaired_positions:
+                        is_clean = False
+                        break
+                if is_clean:
                     donor_right = col + d
+                    
             if donor_left >= 0 and donor_right >= 0:
                 break
 
         if donor_left < 0 and donor_right < 0:
-            continue  # no donor anywhere — keep 1D repair
+            continue  # no donor anywhere — keep 1D physics repair
 
-        # Brightness-match each donor using the flanking rows.
-        # The flanking rows (above/below the repair zone) have REAL data
-        # in BOTH the current column and the donor column.
+        # Brightness-match each donor using the flanking rows (which are real data)
         local_flank_above = img_array[col, row - FLANK:row].astype(np.float64)
         local_flank_below = img_array[col, row_end:row_end + FLANK].astype(np.float64)
         local_mean = np.mean(np.concatenate([local_flank_above, local_flank_below]))
@@ -1378,13 +1393,11 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> tuple[list[Scan
             if donor_col < 0:
                 continue
             d = abs(col - donor_col)
-            # Donor flanking rows (real data)
             d_above = img_array[donor_col, row - FLANK:row].astype(np.float64)
             d_below = img_array[donor_col, row_end:row_end + FLANK].astype(np.float64)
             donor_mean = np.mean(np.concatenate([d_above, d_below]))
-            # Brightness offset
+            
             offset = local_mean - donor_mean
-            # Donor repair-zone pixels (real anatomy!) + offset
             donor_pixels = img_array[donor_col, row:row_end].astype(np.float64)
             shifted = donor_pixels + offset
             w = 1.0 / max(d, 1)
@@ -1400,7 +1413,6 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> tuple[list[Scan
         log.info("2D telemetry repair: %d blocks reconstructed "
                  "(brightness-matched cross-group donors)", telem_2d_count)
 
-    # ── 6. Repair remaining artifact rows ─────────────────────────────────
     img_2d = img_array.T.astype(np.float32)  # (height, width)
     repaired_rows: list[int] = []
 
