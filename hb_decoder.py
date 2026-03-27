@@ -956,13 +956,17 @@ def _calibration_driven_fill(
     if ff2d is not None and len(ff2d) > max(row_indices):
         col_idx = min(max(telem.get("col", 0), 0), ff2d.shape[1] - 1)
         ff_shape = np.array([ff2d[r, col_idx] for r in row_indices], dtype=np.float32)
-        ff_shape = ff_shape / max(float(ff_shape.mean()), 0.01)
         
-        # We blend the pure shape-warp anchored locally with the baseline ramp.
-        # anchor_mid holds the true local ADU block intensity (from neighbors).
-        anchor_mid = (val_top + val_bot) / 2.0
-        if anchor_mid > 0:
-            predicted = 0.70 * (ff_shape * anchor_mid) + 0.30 * predicted
+        # Detrend the flat-field chunk to isolate purely the high-frequency detector texture.
+        # We divide the 36-pixel shape by a linear ramp from its own start to end,
+        # yielding a texture array strictly anchored at 1.0 on both edges.
+        ff_trend = np.linspace(ff_shape[0], ff_shape[-1], len(ff_shape), dtype=np.float32)
+        ff_trend = np.maximum(ff_trend, 1.0)
+        ff_texture = ff_shape / ff_trend
+        
+        # Multiply our local neighbour-anchored interpolation ramp by exactly this texture.
+        # This perfectly preserves the detector signature without breaking the boundary continuity.
+        predicted = predicted * ff_texture
 
     return predicted
 
@@ -1237,8 +1241,10 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> tuple[list[Scan
         # Pixels between the previous frame's echo end and this header
         if hdr_pos > read_pos:
             segment = bytearray(data[read_pos:hdr_pos])
+            # The start of this chunk corresponds to a specific physical row wrapping on the detector
+            segment_row_offset = (len(clean) // 2) % 1316
             repaired, block_positions = _repair_inline_telemetry(
-                segment, return_positions=True,
+                segment, return_positions=True, segment_row_offset=segment_row_offset
             )
             telem_blocks_repaired += (len(segment) - len(repaired) == 0)
             # Map block positions from segment-local to clean-stream-global
