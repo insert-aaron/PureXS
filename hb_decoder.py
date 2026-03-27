@@ -742,7 +742,10 @@ def _detect_echo_end(payload: bytes, min_echo: int = 30,
     return min_echo  # fallback
 
 
-def _repair_inline_telemetry(segment: bytearray) -> bytearray:
+def _repair_inline_telemetry(
+    segment: bytearray,
+    return_positions: bool = False,
+) -> bytearray | tuple[bytearray, list[int]]:
     """Replace inline telemetry blocks with interpolated pixel data.
 
     The Orthophos XG embeds 72-byte kV/position telemetry records into
@@ -757,7 +760,9 @@ def _repair_inline_telemetry(segment: bytearray) -> bytearray:
 
     This function finds each block and replaces it with linearly
     interpolated pixel values from the surrounding rows, preserving
-    the total byte count.
+    the total byte count.  If *return_positions* is True, also returns
+    the byte offsets within the segment where blocks were repaired (for
+    downstream 2D reconstruction).
     """
     TELEM_SIZE = 72
     TELEM_PIXELS = TELEM_SIZE // 2  # 36 pixels overwritten per block
@@ -793,9 +798,15 @@ def _repair_inline_telemetry(segment: bytearray) -> bytearray:
             block_starts.append(blk_start)
 
     if not block_starts:
-        return segment
+        return (segment, []) if return_positions else segment
+
+    import math
+    import random
 
     result = bytearray(segment)  # copy — we'll overwrite in place
+
+    # Number of real pixels on each side to sample for noise estimation
+    NOISE_WINDOW = 20  # pixels (40 bytes)
 
     # Repair 72-byte telemetry blocks
     for bs in block_starts:
@@ -807,13 +818,46 @@ def _repair_inline_telemetry(segment: bytearray) -> bytearray:
             val_before = val_after = (result[bs - 2] << 8) | result[bs - 1]
         else:
             val_before = val_after = (result[be] << 8) | result[be + 1]
+
+        # Estimate local noise from neighbouring real pixels.
+        # Read up to NOISE_WINDOW pixels on each side and compute the
+        # standard deviation of row-to-row differences (first differences
+        # remove the slow signal gradient, isolating noise).
+        noise_diffs: list[float] = []
+        # Pixels before the block
+        px_before_start = max(0, bs - NOISE_WINDOW * 2)
+        for k in range(px_before_start, bs - 2, 2):
+            v0 = (result[k] << 8) | result[k + 1]
+            v1 = (result[k + 2] << 8) | result[k + 3]
+            noise_diffs.append(float(v1 - v0))
+        # Pixels after the block
+        px_after_end = min(len(result), be + NOISE_WINDOW * 2)
+        for k in range(be, px_after_end - 2, 2):
+            v0 = (result[k] << 8) | result[k + 1]
+            v1 = (result[k + 2] << 8) | result[k + 3]
+            noise_diffs.append(float(v1 - v0))
+
+        if len(noise_diffs) >= 4:
+            # std of first-differences = sqrt(2) * pixel_noise
+            diff_std = (sum(d * d for d in noise_diffs) / len(noise_diffs)) ** 0.5
+            noise_std = diff_std / 1.414
+        else:
+            noise_std = 0.0
+
         for j in range(TELEM_PIXELS):
             t = (j + 1) / (TELEM_PIXELS + 1)
-            val = int(val_before * (1 - t) + val_after * t)
+            val = val_before * (1 - t) + val_after * t
+            # Add matched noise so repaired pixels have the same texture
+            # as surrounding real detector data.
+            if noise_std > 0:
+                val += random.gauss(0, noise_std)
+            val = max(0, min(65535, int(val)))
             pos = bs + j * 2
             result[pos] = (val >> 8) & 0xFF
             result[pos + 1] = val & 0xFF
 
+    if return_positions:
+        return result, block_starts
     return result
 
 
@@ -844,7 +888,7 @@ def _find_pixel_start(data: bytes, search_start: int = 60000,
     return best_off
 
 
-def _extract_panoramic(data: bytes, detector_height: int = 0) -> list[Scanline]:
+def _extract_panoramic(data: bytes, detector_height: int = 0) -> tuple[list[Scanline], np.ndarray | None] | list[Scanline]:
     """Extract a full panoramic image from the raw scan data stream.
 
     The Orthophos XG (DX41) sends the full detector readout as a continuous
@@ -869,7 +913,7 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> list[Scanline]:
     Returns a list of Scanline objects, one per image column.
     """
     if len(data) < 10000:
-        return []
+        return [], None
 
     # ── 1. Locate all 0x1003 session headers ──────────────────────────────
     headers_1003: list[int] = []
@@ -889,7 +933,7 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> list[Scanline]:
 
     if not headers_1003:
         log.warning("Panoramic: no 0x1003 frames found in %d bytes", len(data))
-        return []
+        return [], None
 
     log.info("Panoramic: found %d 0x1003 frames", len(headers_1003))
 
@@ -905,6 +949,9 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> list[Scanline]:
 
     echo_sizes_log: list[int] = []
     telem_blocks_repaired = 0
+    # Track byte offsets of repaired telemetry blocks in the clean stream
+    # so we can do a second-pass 2D repair after reshape.
+    repaired_byte_offsets: list[int] = []
 
     for i, hdr_pos in enumerate(headers_1003):
         if hdr_pos < pixel_start:
@@ -913,8 +960,14 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> list[Scanline]:
         # Pixels between the previous frame's echo end and this header
         if hdr_pos > read_pos:
             segment = bytearray(data[read_pos:hdr_pos])
-            repaired = _repair_inline_telemetry(segment)
-            telem_blocks_repaired += (len(segment) - len(repaired) == 0)  # count frames processed
+            repaired, block_positions = _repair_inline_telemetry(
+                segment, return_positions=True,
+            )
+            telem_blocks_repaired += (len(segment) - len(repaired) == 0)
+            # Map block positions from segment-local to clean-stream-global
+            base = len(clean)
+            for bp in block_positions:
+                repaired_byte_offsets.append(base + bp)
             clean.extend(repaired)
 
         after_hdr = hdr_pos + SESSION_HEADER_SIZE
@@ -932,7 +985,13 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> list[Scanline]:
             tail_limit = pos
     if tail_limit > read_pos:
         segment = bytearray(data[read_pos:tail_limit])
-        clean.extend(_repair_inline_telemetry(segment))
+        repaired, block_positions = _repair_inline_telemetry(
+            segment, return_positions=True,
+        )
+        base = len(clean)
+        for bp in block_positions:
+            repaired_byte_offsets.append(base + bp)
+        clean.extend(repaired)
 
     if echo_sizes_log:
         from collections import Counter
@@ -949,7 +1008,7 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> list[Scanline]:
 
     if total_pixels < 100000:
         log.warning("Panoramic: too few pixels (%d)", total_pixels)
-        return []
+        return [], None
 
     # ── 5. Determine image dimensions ─────────────────────────────────────
     img_height = detector_height if detector_height > 0 else PANO_DEFAULT_HEIGHT
@@ -964,7 +1023,7 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> list[Scanline]:
         img_width = len(pixel_data) // (img_height * 2)
         usable_bytes = img_width * img_height * 2
 
-    pixels = np.frombuffer(pixel_data[:usable_bytes], dtype=">u2")
+    pixels = np.frombuffer(pixel_data[:usable_bytes], dtype=">u2").copy()
     img_array = pixels.reshape(img_width, img_height)  # (cols, rows)
 
     log.info(
@@ -972,6 +1031,91 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> list[Scanline]:
         img_width, img_height,
         img_array.min(), img_array.max(), img_array.mean(),
     )
+
+    # ── 5b. 2D telemetry repair ──────────────────────────────────────────
+    #   The 1D repair (step 3) filled overwritten pixels with a noisy
+    #   linear ramp.  Now that we have the full 2D image we can do much
+    #   better: for each repaired 36-pixel block, find a DONOR column
+    #   from a different frame group that has REAL data at those exact
+    #   rows (the telemetry sits at different rows in each group).
+    #   Brightness-match the donor to the local column using the
+    #   flanking rows (which have real data in both columns).
+    TELEM_SIZE = 72
+    TELEM_PIXELS = TELEM_SIZE // 2  # 36 pixels per block
+    FLANK = 8  # rows above/below repair zone for brightness matching
+
+    # Build set of repaired positions for donor lookup
+    repaired_positions: set[tuple[int, int]] = set()
+    for byte_off in repaired_byte_offsets:
+        pixel_off = byte_off // 2
+        col = pixel_off // img_height
+        row = pixel_off % img_height
+        if 0 <= col < img_width:
+            repaired_positions.add((col, row))
+
+    MAX_DONOR_SEARCH = 260  # must span at least one full 248-col group
+
+    telem_2d_count = 0
+    for byte_off in repaired_byte_offsets:
+        pixel_off = byte_off // 2
+        col = pixel_off // img_height
+        row = pixel_off % img_height
+        if col < 0 or col >= img_width:
+            continue
+        row_end = min(row + TELEM_PIXELS, img_height)
+        if row_end <= row or row < FLANK or row_end + FLANK > img_height:
+            continue
+
+        # Find nearest donor columns (different group = no repair at this row)
+        donor_left = donor_right = -1
+        for d in range(1, MAX_DONOR_SEARCH + 1):
+            if donor_left < 0 and col - d >= 0:
+                if (col - d, row) not in repaired_positions:
+                    donor_left = col - d
+            if donor_right < 0 and col + d < img_width:
+                if (col + d, row) not in repaired_positions:
+                    donor_right = col + d
+            if donor_left >= 0 and donor_right >= 0:
+                break
+
+        if donor_left < 0 and donor_right < 0:
+            continue  # no donor anywhere — keep 1D repair
+
+        # Brightness-match each donor using the flanking rows.
+        # The flanking rows (above/below the repair zone) have REAL data
+        # in BOTH the current column and the donor column.
+        local_flank_above = img_array[col, row - FLANK:row].astype(np.float64)
+        local_flank_below = img_array[col, row_end:row_end + FLANK].astype(np.float64)
+        local_mean = np.mean(np.concatenate([local_flank_above, local_flank_below]))
+
+        acc = np.zeros(row_end - row, dtype=np.float64)
+        wt = 0.0
+
+        for donor_col in (donor_left, donor_right):
+            if donor_col < 0:
+                continue
+            d = abs(col - donor_col)
+            # Donor flanking rows (real data)
+            d_above = img_array[donor_col, row - FLANK:row].astype(np.float64)
+            d_below = img_array[donor_col, row_end:row_end + FLANK].astype(np.float64)
+            donor_mean = np.mean(np.concatenate([d_above, d_below]))
+            # Brightness offset
+            offset = local_mean - donor_mean
+            # Donor repair-zone pixels (real anatomy!) + offset
+            donor_pixels = img_array[donor_col, row:row_end].astype(np.float64)
+            shifted = donor_pixels + offset
+            w = 1.0 / max(d, 1)
+            acc += shifted * w
+            wt += w
+
+        if wt > 0:
+            repaired = np.clip(acc / wt, 0, 65535).astype(np.uint16)
+            img_array[col, row:row_end] = repaired
+            telem_2d_count += 1
+
+    if telem_2d_count:
+        log.info("2D telemetry repair: %d blocks reconstructed "
+                 "(brightness-matched cross-group donors)", telem_2d_count)
 
     # ── 6. Repair remaining artifact rows ─────────────────────────────────
     img_2d = img_array.T.astype(np.float32)  # (height, width)
@@ -1097,7 +1241,17 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> list[Scanline]:
             else img_array[col_idx].astype(np.uint16),
         ))
 
-    return scanlines
+    # Build repair mask (height × width) for downstream inpainting
+    TELEM_PX = 36
+    _repair_mask = np.zeros((img_height, img_width), dtype=np.uint8)
+    for byte_off in repaired_byte_offsets:
+        pixel_off = byte_off // 2
+        c = pixel_off // img_height
+        r = pixel_off % img_height
+        if 0 <= c < img_width:
+            _repair_mask[r:min(r + TELEM_PX, img_height), c] = 255
+
+    return scanlines, _repair_mask
 
 
 def _extract_events(data: bytes) -> list[ScanEvent]:
@@ -1159,6 +1313,7 @@ def _pair_heartbeats(capture: DecodedCapture) -> None:
 def reconstruct_image(
     scanlines: list[Scanline],
     invert: bool = True,
+    repair_mask: np.ndarray | None = None,
 ) -> Image.Image | None:
     """Reconstruct a panoramic image from decoded scanlines.
 
@@ -1168,6 +1323,8 @@ def reconstruct_image(
 
     Args:
         scanlines: List of Scanline objects (one per column).
+        repair_mask: Optional (height, width) uint8 mask where 255 marks
+            telemetry-repaired pixels.  Used for linear-domain inpainting.
         invert: If True (default), invert for dental convention
                 (MONOCHROME1 — bone/tooth = white, air = black).
 
@@ -1252,6 +1409,81 @@ def reconstruct_image(
                             len(ff_row), height)
     except Exception as exc:
         log.debug("Flat-field row correction skipped: %s", exc)
+
+    # ── SGF per-pixel gain correction ─────────────────────────────────
+    #   Apply per-frame, per-row gain profile derived from a blank
+    #   (no-patient) exposure.  This corrects frame-level gain steps,
+    #   die-edge discontinuities, and per-pixel detector non-uniformity.
+    #   The profile is a (num_frames, height) array stored alongside
+    #   the flat-field row profile.
+    try:
+        sgf_path = Path(__file__).parent / "sgf_frame_gain.npy"
+        if sgf_path.exists():
+            sgf_gain = np.load(sgf_path)  # (num_frames, height)
+            n_sgf_frames = sgf_gain.shape[0]
+            cpf = 32768.0 / height
+            for c in range(width):
+                fi = c / cpf
+                f0 = min(int(fi), n_sgf_frames - 1)
+                f1 = min(f0 + 1, n_sgf_frames - 1)
+                t = fi - f0
+                gain_col = sgf_gain[f0] * (1 - t) + sgf_gain[f1] * t
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    corr = np.where(gain_col > 0.5, 1.0 / gain_col, 1.0)
+                img_f[:, c] *= np.clip(corr, 0.5, 2.0)
+            log.info("SGF gain correction applied (%d frames × %d rows)",
+                     n_sgf_frames, sgf_gain.shape[1])
+    except Exception as exc:
+        log.debug("SGF gain correction skipped: %s", exc)
+
+    # ── Die junction stitching ────────────────────────────────────────
+    #   The DX41 detector has two vertically stacked CMOS dies.  They
+    #   may have a dead-row gap AND/OR a gain mismatch.  Detect the
+    #   junction by finding the signal minimum in the central rows,
+    #   then equalise the two halves with a smooth sigmoid blend.
+    active_col_lo = max(width // 5, 50)
+    active_col_hi = min(width * 4 // 5, width - 50)
+    row_signal = np.mean(img_f[:, active_col_lo:active_col_hi], axis=1)
+    # Smooth to find the true minimum (not noise)
+    from scipy.ndimage import gaussian_filter1d as _gf1d
+    row_smooth = _gf1d(row_signal, sigma=10)
+    mid = height // 2
+    search_lo, search_hi = mid - 200, mid + 200
+    junction_row = search_lo + int(np.argmin(row_smooth[search_lo:search_hi]))
+
+    # Measure gain on each side (well away from junction)
+    upper_band = img_f[max(0, junction_row - 200):junction_row - 80,
+                       active_col_lo:active_col_hi]
+    lower_band = img_f[junction_row + 80:min(height, junction_row + 200),
+                       active_col_lo:active_col_hi]
+    upper_med = np.median(upper_band[upper_band > 10]) if np.any(upper_band > 10) else 1.0
+    lower_med = np.median(lower_band[lower_band > 10]) if np.any(lower_band > 10) else 1.0
+
+    if upper_med > 10 and lower_med > 10 and abs(upper_med / lower_med - 1) > 0.05:
+        ratio = upper_med / lower_med
+        blend_half = 80
+        for r in range(height):
+            dist = r - junction_row
+            sigmoid = 1.0 / (1.0 + np.exp(-dist / (blend_half / 4)))
+            img_f[r] *= 1.0 * (1 - sigmoid) + ratio * sigmoid
+        log.info("Die junction: row %d, gain ratio %.3f (upper/lower)",
+                 junction_row, ratio)
+
+    # Interpolate across any dead rows near the junction
+    gap_threshold = np.max(row_signal) * 0.02
+    dead_rows_mask = row_signal < gap_threshold
+    dead_indices = np.where(dead_rows_mask)[0]
+    central_dead = dead_indices[(dead_indices > mid - 200) &
+                                (dead_indices < mid + 200)]
+    if len(central_dead) >= 3:
+        gs, ge = int(central_dead[0]), int(central_dead[-1])
+        ab = max(gs - 1, 0)
+        bl = min(ge + 1, height - 1)
+        for r in range(gs, ge + 1):
+            t = (r - gs + 1) / (ge - gs + 2)
+            img_f[r] = img_f[ab] * (1 - t) + img_f[bl] * t
+        log.info("Die junction: interpolated %d dead rows (%d-%d)",
+                 ge - gs + 1, gs, ge)
 
     # ── Row repair ─────────────────────────────────────────────────────
     #   1. Telemetry-repair spike rows: the 36-pixel interpolated blocks
@@ -1379,6 +1611,26 @@ def reconstruct_image(
     col_trend = uniform_filter1d(col_meds, size=101)
     img_f *= (col_trend / col_meds)[np.newaxis, :]
 
+    # ── Linear-domain inpainting of telemetry repair zones ─────────
+    #   Before any non-linear processing (gamma, MUSICA), inpaint the
+    #   telemetry-repaired pixels using surrounding real data.  This
+    #   prevents MUSICA from amplifying the repair/real boundaries.
+    if repair_mask is not None and repair_mask.shape == img_f.shape:
+        try:
+            import cv2
+            p99 = np.percentile(img_f, 99.5)
+            if p99 > 0:
+                img_16 = np.clip(img_f / p99 * 65535, 0, 65535).astype(np.uint16)
+                kernel = np.ones((5, 3), dtype=np.uint8)
+                mask_d = cv2.dilate(repair_mask, kernel, iterations=1)
+                img_16 = cv2.inpaint(img_16, mask_d,
+                                     inpaintRadius=20, flags=cv2.INPAINT_NS)
+                img_f = img_16.astype(np.float32) / 65535.0 * p99
+                log.info("Linear-domain inpainting: %d pixels",
+                         int(np.sum(mask_d > 0)))
+        except Exception as exc:
+            log.debug("Linear-domain inpainting skipped: %s", exc)
+
     # ── WWE tone mapping + MUSICA contrast enhancement ─────────────
     #   1. Percentile-normalise to [0,1] and apply gamma (0.4) for
     #      dental display convention (bone = bright, air = dark).
@@ -1400,12 +1652,15 @@ def reconstruct_image(
     else:
         img_norm = np.power(img_norm, WWE_GAMMA)
 
-    # Horizontal deband: soften column-to-column steps (sigma=1.5 cols)
-    img_norm = gaussian_filter1d(img_norm, sigma=1.5, axis=1)
+    # Horizontal deband: soften frame-boundary gain steps (sigma=4 cols).
+    # Each TCP frame (~25 cols) may have slightly different detector gain,
+    # creating visible vertical banding.  A wider Gaussian softens these
+    # step transitions without significant loss of horizontal anatomy.
+    img_norm = gaussian_filter1d(img_norm, sigma=4.0, axis=1)
 
     # MUSICA Laplacian pyramid (4 detail scales + residual)
     MUSICA_SIGMAS = [2, 8, 32, 128]
-    MUSICA_GAINS = [1.5, 2.0, 1.2, 0.2]
+    MUSICA_GAINS = [1.0, 1.8, 1.2, 0.15]
 
     levels = [img_norm]
     for sigma in MUSICA_SIGMAS:
@@ -1437,22 +1692,72 @@ def reconstruct_image(
     log.info("Applied WWE gamma=%.1f + MUSICA multi-scale enhancement", WWE_GAMMA)
     img_8bit = (img_16 >> 8).astype(np.uint8)
 
+    # ── Sidexis-matched tone curve ────────────────────────────────
+    #   Apply a 256-entry LUT derived from histogram-matching our
+    #   pipeline output against a Sidexis XG reference export.  This
+    #   adjusts the global brightness/contrast to match the clinical
+    #   display convention used by Sidexis (darker midtones, higher
+    #   contrast).  If the LUT file is missing, this step is skipped.
+    try:
+        lut_path = Path(__file__).parent / "sidexis_tone_lut.npy"
+        if lut_path.exists():
+            tone_lut = np.load(lut_path)
+            if len(tone_lut) == 256:
+                img_8bit = tone_lut[img_8bit]
+                log.info("Sidexis tone LUT applied")
+    except Exception as exc:
+        log.debug("Sidexis tone LUT skipped: %s", exc)
+
+    # ── Collimator edge masking ──────────────────────────────────────
+    #   The X-ray collimator creates sharp bright/dark boundaries at
+    #   the left and right edges of the active exposure.  Detect these
+    #   edges and apply a smooth fade to black so the crop boundary
+    #   looks clean (matching Sidexis behaviour).
+    col_brightness = np.mean(img_8bit, axis=0).astype(np.float32)
+    col_smooth = uniform_filter1d(col_brightness, size=51)
+    peak_brightness = np.max(col_smooth)
+    edge_thresh = peak_brightness * 0.15
+    active_cols_mask = col_smooth > edge_thresh
+    active_indices = np.where(active_cols_mask)[0]
+    if len(active_indices) > 100:
+        left_edge = int(active_indices[0])
+        right_edge = int(active_indices[-1])
+        FADE_WIDTH = 15
+        # Fade left edge
+        for c in range(max(0, left_edge - FADE_WIDTH), left_edge + FADE_WIDTH):
+            if 0 <= c < width:
+                t = max(0.0, min(1.0, (c - left_edge + FADE_WIDTH) / (2 * FADE_WIDTH)))
+                img_8bit[:, c] = (img_8bit[:, c].astype(np.float32) * t).astype(np.uint8)
+        # Fade right edge
+        for c in range(max(0, right_edge - FADE_WIDTH), min(width, right_edge + FADE_WIDTH + 1)):
+            if 0 <= c < width:
+                t = max(0.0, min(1.0, (right_edge + FADE_WIDTH - c) / (2 * FADE_WIDTH)))
+                img_8bit[:, c] = (img_8bit[:, c].astype(np.float32) * t).astype(np.uint8)
+        # Black out beyond fade
+        img_8bit[:, :max(0, left_edge - FADE_WIDTH)] = 0
+        img_8bit[:, min(width, right_edge + FADE_WIDTH + 1):] = 0
+        log.info("Collimator edges: left=%d, right=%d (fade=%d)",
+                 left_edge, right_edge, FADE_WIDTH)
+
     # ── Crop to standard output size ───────────────────────────────
     #   Sidexis outputs 2440×1280 from the raw 2706×1316.
-    #   Remove: 18 rows top (dark reference / border)
-    #           18 rows bottom (dark reference / die junction tail)
-    #           ~133 columns left (pre-exposure dead + scan start)
-    #           ~133 columns right (scan end + post-exposure)
-    #   Adjust dynamically if the image is smaller than expected.
     CROP_H, CROP_W = 1280, 2440
     if height > CROP_H:
         row_top = min(18, (height - CROP_H) // 2)
         row_bot = row_top + CROP_H
         img_8bit = img_8bit[row_top:row_bot, :]
     if width > CROP_W:
-        # Center the crop on the active scan region (skip pre-exposure left)
-        col_left = min((width - CROP_W), max(20, (width - CROP_W) // 2))
-        col_right = col_left + CROP_W
+        # Center crop on the active region
+        if len(active_indices) > 100:
+            center = (left_edge + right_edge) // 2
+            col_left = max(0, center - CROP_W // 2)
+            col_right = col_left + CROP_W
+            if col_right > width:
+                col_right = width
+                col_left = max(0, col_right - CROP_W)
+        else:
+            col_left = min((width - CROP_W), max(20, (width - CROP_W) // 2))
+            col_right = col_left + CROP_W
         img_8bit = img_8bit[:, col_left:col_right]
     crop_h, crop_w = img_8bit.shape
     log.info("Cropped: %dx%d -> %dx%d", width, height, crop_w, crop_h)
@@ -1870,7 +2175,11 @@ class SironaLiveClient:
         self._scan_kv_peak = kv_peak / 10.0
 
         # Extract full panoramic image from continuous pixel stream
-        scanlines = _extract_panoramic(raw)
+        _pano_result = _extract_panoramic(raw)
+        if isinstance(_pano_result, tuple):
+            scanlines, self._repair_mask = _pano_result
+        else:
+            scanlines, self._repair_mask = _pano_result, None
         if not scanlines:
             # Fallback to marker-based extraction
             scanlines = _extract_scanlines(raw)
