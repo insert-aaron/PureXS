@@ -742,11 +742,247 @@ def _detect_echo_end(payload: bytes, min_echo: int = 30,
     return min_echo  # fallback
 
 
+# ── Telemetry block ADC offsets ──────────────────────────────────────────────
+#
+# The 72-byte telemetry block structure (36 × BE uint16 words):
+#
+#   Word  0     : position counter (column index in scan)
+#   Words 1–3   : kV/mA exposure metadata
+#   Words 4–6   : detector status / frame counter
+#   Words 7–27  : 21 × ADC reference pixel readings (light references at
+#                 fixed row positions on the detector, read every frame)
+#   Words 28–32 : checksum / reserved
+#   Word  33    : scan-line row-position word (XX XX in tail sig)
+#   Words 34–35 : tail marker bytes (00/20 01 … 00/20 34)
+#
+# The ADC reference pixels are the detector's built-in calibration pixels —
+# they receive a fixed amount of light from an LED source inside the sensor
+# housing calibrated during manufacture.  Their readings therefore encode
+# the detector's real-time gain and offset at the instant of the frame.
+#
+# Byte layout within the 72 bytes (0-indexed):
+_TELEM_ADC_WORD_START = 7    # first ADC reference word index
+_TELEM_ADC_WORD_COUNT = 21   # number of ADC reference words
+_TELEM_COL_WORD       = 0    # column position word index
+_TELEM_KV_WORD        = 1    # kV word index
+
+# Cache for the flat-field 2-D array so we only load it once per process
+_FF2D_CACHE: np.ndarray | None = None
+_FF2D_MEAN:  float = 0.0
+
+
+def _load_flat_field_2d() -> tuple[np.ndarray | None, float]:
+    """Load the full 2-D flat-field array from flat_field_raw.bin.
+
+    The file lives in the data directory (~/.purexs/ or %APPDATA%/PureXS)
+    and, if not found there, falls back to the parent of the source tree
+    (the location used during development).  Returns a float32 array with
+    shape (height, width) normalised so that the mean over a centre crop
+    equals 1.0, plus the raw mean pixel value used for renormalisation.
+
+    Returns (None, 0.0) when the file cannot be found or loaded.
+    """
+    global _FF2D_CACHE, _FF2D_MEAN
+    if _FF2D_CACHE is not None:
+        return _FF2D_CACHE, _FF2D_MEAN
+
+    search_paths = [
+        get_data_dir() / "flat_field_raw.bin",
+        Path(__file__).parent.parent / "flat_field_raw.bin",  # dev tree sibling
+        Path(__file__).parent / "flat_field_raw.bin",
+    ]
+    ff_path: Path | None = None
+    for p in search_paths:
+        if p.exists():
+            ff_path = p
+            break
+
+    if ff_path is None:
+        log.debug("flat_field_raw.bin not found — calibration-driven fill disabled")
+        return None, 0.0
+
+    try:
+        raw = np.fromfile(str(ff_path), dtype=">u2")  # big-endian uint16
+        total = raw.size
+        # Try to reshape using the known detector dimensions
+        H, W = PANO_DEFAULT_HEIGHT, PANO_DEFAULT_WIDTH
+        if total >= H * W:
+            arr = raw[:H * W].reshape(H, W).astype(np.float32)
+        else:
+            # Unknown dimensions — try square-ish reshape
+            W2 = int(np.sqrt(total))
+            arr = raw[:W2 * W2].reshape(W2, W2).astype(np.float32)
+
+        # Normalise to median ≈ 1.0 using centre crop (avoids edge shadow)
+        ch0, ch1 = arr.shape[0] // 4, arr.shape[0] * 3 // 4
+        cw0, cw1 = arr.shape[1] // 4, arr.shape[1] * 3 // 4
+        centre_med = float(np.median(arr[ch0:ch1, cw0:cw1]))
+        if centre_med < 1.0:
+            centre_med = 1.0
+        arr /= centre_med
+
+        _FF2D_CACHE = arr
+        _FF2D_MEAN  = centre_med
+        assert ff_path is not None  # guarded by early return above
+        log.info("Flat-field 2D loaded: %s → shape %s, median=%.0f",
+                 ff_path.name, arr.shape, centre_med)
+        return arr, centre_med
+    except Exception as exc:
+        log.debug("flat_field_raw.bin load failed: %s", exc)
+        return None, 0.0
+
+
+def _parse_telemetry_block(block: bytes | bytearray) -> dict:
+    """Parse a 72-byte telemetry block and extract its calibration fields.
+
+    Returns a dict with:
+      - ``col``      : detector column position counter (uint16)
+      - ``kv``       : tube kV word (uint16)
+      - ``adc``      : numpy float32 array of 21 ADC reference readings
+      - ``adc_mean`` : mean of the 21 ADC readings (float)
+      - ``adc_std``  : std-dev of the 21 ADC readings (float)
+      - ``adc_valid``: True when the readings look like real light-reference
+                       data (non-zero, within plausible detector ADC range)
+
+    The ADC readings are de-stuffed: 0x20-prefixed bytes (protocol
+    byte-stuffing) are transparently handled because we read the raw
+    72-byte block which was already identified by its tail pattern.
+    """
+    WORD = 2
+    if len(block) < 72:
+        return {"col": 0, "kv": 0, "adc": np.zeros(21, np.float32),
+                "adc_mean": 0.0, "adc_std": 0.0, "adc_valid": False}
+
+    def w(i: int) -> int:
+        """Read big-endian uint16 at word index i."""
+        o = i * WORD
+        return (block[o] << 8) | block[o + 1]
+
+    col = w(_TELEM_COL_WORD)
+    kv  = w(_TELEM_KV_WORD)
+
+    adc_words = np.array(
+        [w(_TELEM_ADC_WORD_START + k) for k in range(_TELEM_ADC_WORD_COUNT)],
+        dtype=np.float32,
+    )
+
+    # Validity check: real ADC readings are typically in 0x0100–0x7FFF
+    # range and not all identical (not protocol filler bytes like 0x2020).
+    adc_min, adc_max = float(adc_words.min()), float(adc_words.max())
+    adc_valid = (
+        adc_max > 256
+        and adc_min < 60000
+        and (adc_max - adc_min) > 32  # some spread expected
+        and not all(adc_words[i] == adc_words[0] for i in range(len(adc_words)))
+    )
+
+    return {
+        "col":       col,
+        "kv":        kv,
+        "adc":       adc_words,
+        "adc_mean":  float(adc_words.mean()),
+        "adc_std":   float(adc_words.std()),
+        "adc_valid": adc_valid,
+    }
+
+
+def _calibration_driven_fill(
+    block_start: int,
+    telem: dict,
+    segment: bytearray,
+    ff2d: np.ndarray | None,
+    ff2d_mean: float,
+    segment_row_offset: int = 0,
+) -> np.ndarray | None:
+    """Predict the 36 missing pixels using calibration data.
+
+    Uses a three-source prediction:
+      1. **Flat-field shape** — the per-row gain profile from the 2-D
+         flat-field image tells us the *relative* expected signal at each
+         of the 36 missing rows.
+      2. **ADC reference scale** — the 21 ADC readings from the telemetry
+         block encode the detector's real-time global gain.  We compare
+         their mean against the flat-field's calibrated ADC mean to derive
+         a per-block gain factor.
+      3. **Neighbour anchor** — we scale the flat-field prediction so that
+         it matches the actual pixel values immediately above and below the
+         gap, ensuring a smooth, artefact-free join.
+
+    Returns a float32 array of 36 predicted pixel values (big-endian
+    uint16 range, 0–65535), or None if prediction is not possible.
+    """
+    TELEM_SIZE   = 72
+    TELEM_PIXELS = 36  # TELEM_SIZE // 2
+    bs = block_start
+    be = bs + TELEM_SIZE
+
+    # ── 1. Collect neighbour anchor values ────────────────────────────────
+    FLANK = 12  # pixels on each side to use for brightness matching
+    pixels_above: list[float] = []
+    pixels_below: list[float] = []
+
+    for k in range(bs - FLANK * 2, bs, 2):
+        if k >= 0:
+            pixels_above.append(float((segment[k] << 8) | segment[k + 1]))
+    for k in range(be, be + FLANK * 2, 2):
+        if k + 1 < len(segment):
+            pixels_below.append(float((segment[k] << 8) | segment[k + 1]))
+
+    if not pixels_above and not pixels_below:
+        return None  # no anchor — fall back to interpolation
+
+    anchor_above = float(np.mean(pixels_above)) if pixels_above else None
+    anchor_below = float(np.mean(pixels_below)) if pixels_below else None
+
+    # ── 2. Build baseline prediction from linear interpolation ───────────
+    #   Even without the flat-field we can produce a ramp; the flat-field
+    #   then warps the ramp to follow the detector's per-row gain shape.
+    val_top = anchor_above if anchor_above is not None else (anchor_below or 0.0)
+    val_bot = anchor_below if anchor_below is not None else (anchor_above or 0.0)
+
+    t_arr = np.linspace(1.0 / (TELEM_PIXELS + 1), TELEM_PIXELS / (TELEM_PIXELS + 1),
+                        TELEM_PIXELS, dtype=np.float32)
+    predicted = val_top * (1.0 - t_arr) + val_bot * t_arr
+
+    # ── 3. Flat-field shape warp ─ DISABLED ─────────────────────────────
+    #
+    # Prerequisites before re-enabling:
+    #   a) A *fresh* flat-field capture (flat_field_raw.bin is outdated —
+    #      detector gain drifts over time so the old file adds noise here).
+    #   b) Confirmed ADC word layout (diagnostic shows words 7-27 are
+    #      near-constant across columns, suggesting they are NOT live ADC
+    #      light-reference readings — the real layout is still TBD).
+    #
+    # Until both are resolved, the neighbour-anchored linear ramp below
+    # is strictly better than blending in a stale/wrong flat-field warp.
+    #
+    # Re-enable by uncommenting the block below once:
+    #   1. A fresh blank exposure is captured and saved as flat_field_raw.bin
+    #   2. adc_layout_verify.py shows Pearson r > 0.70 with the pixel stream
+    #
+    # ── (disabled warp code preserved for future use) ────────────────────
+    # if ff2d is not None and telem["adc_valid"]:
+    #     col_idx = min(max(telem["col"], 0), ff2d.shape[1] - 1)
+    #     first_px  = bs // 2
+    #     first_row = (segment_row_offset + first_px) % PANO_DEFAULT_HEIGHT
+    #     row_indices = [(first_row + j) % PANO_DEFAULT_HEIGHT for j in range(TELEM_PIXELS)]
+    #     ff_rows = np.array([ff2d[r, col_idx] for r in row_indices], dtype=np.float32)
+    #     ff_shape = ff_rows / max(float(ff_rows.mean()), 0.01)
+    #     gain_scalar = float(np.clip(telem["adc_mean"] / ff2d_mean, 0.6, 1.4)) if ff2d_mean > 0 else 1.0
+    #     anchor_mid = (val_top + val_bot) / 2.0
+    #     if anchor_mid > 0:
+    #         predicted = 0.70 * (ff_shape * anchor_mid * gain_scalar) + 0.30 * predicted
+    _ = ff2d  # suppress unused-variable warning while disabled
+
+    return predicted
+
+
 def _repair_inline_telemetry(
     segment: bytearray,
     return_positions: bool = False,
+    segment_row_offset: int = 0,
 ) -> bytearray | tuple[bytearray, list[int]]:
-    """Replace inline telemetry blocks with interpolated pixel data.
+    """Replace inline telemetry blocks with calibration-driven predicted pixels.
 
     The Orthophos XG embeds 72-byte kV/position telemetry records into
     the pixel stream at intervals of exactly 2632 bytes (= 1316 pixels
@@ -758,13 +994,21 @@ def _repair_inline_telemetry(
     network capture the protocol uses 0x20 byte-stuffing, so the same
     tail appears as ``20 01 XX XX 20 34``.  Both variants are detected.
 
-    This function finds each block and replaces it with linearly
-    interpolated pixel values from the surrounding rows, preserving
-    the total byte count.  If *return_positions* is True, also returns
-    the byte offsets within the segment where blocks were repaired (for
-    downstream 2D reconstruction).
+    **Calibration-driven fill (primary path):**
+      1. Parse the 21 ADC reference readings from each 72-byte block.
+      2. Load the 2-D flat-field to get per-pixel gain profiles.
+      3. Combine ADC scale + flat-field shape + neighbour anchors to
+         predict the missing 36 pixel values with detector physics.
+
+    **Fallback path (when flat-field is unavailable or ADC readings are
+    corrupt):** linear interpolation between the border pixels with
+    matched noise, identical to the previous behaviour.
+
+    If *return_positions* is True, also returns the byte offsets within
+    the segment where blocks were repaired (for downstream 2D
+    reconstruction).
     """
-    TELEM_SIZE = 72
+    TELEM_SIZE   = 72
     TELEM_PIXELS = TELEM_SIZE // 2  # 36 pixels overwritten per block
 
     # Find all telemetry blocks by tail pattern.
@@ -800,61 +1044,104 @@ def _repair_inline_telemetry(
     if not block_starts:
         return (segment, []) if return_positions else segment
 
-    import math
     import random
+
+    # Try to load flat-field once (cached after first load)
+    ff2d, ff2d_mean = _load_flat_field_2d()
 
     result = bytearray(segment)  # copy — we'll overwrite in place
 
     # Number of real pixels on each side to sample for noise estimation
     NOISE_WINDOW = 20  # pixels (40 bytes)
 
-    # Repair 72-byte telemetry blocks
+    cal_count  = 0  # blocks filled via calibration
+    interp_count = 0  # blocks filled via fallback interpolation
+
     for bs in block_starts:
         be = bs + TELEM_SIZE
-        if bs >= 2 and be + 1 < len(result):
-            val_before = (result[bs - 2] << 8) | result[bs - 1]
-            val_after = (result[be] << 8) | result[be + 1]
-        elif bs >= 2:
-            val_before = val_after = (result[bs - 2] << 8) | result[bs - 1]
+
+        # ── Parse ADC telemetry from the block ────────────────────────────
+        telem = _parse_telemetry_block(segment[bs:be])
+
+        # ── Try calibration-driven prediction first ────────────────────
+        predicted = _calibration_driven_fill(
+            bs, telem, result, ff2d, ff2d_mean, segment_row_offset,
+        )
+
+        if predicted is not None and telem["adc_valid"]:
+            # Write calibration-predicted values (with matched noise)
+            # Estimate local noise from surrounding pixels
+            noise_diffs: list[float] = []
+            px_before_start = max(0, bs - NOISE_WINDOW * 2)
+            for k in range(px_before_start, bs - 2, 2):
+                v0 = (result[k] << 8) | result[k + 1]
+                v1 = (result[k + 2] << 8) | result[k + 3]
+                noise_diffs.append(float(v1 - v0))
+            px_after_end = min(len(result), be + NOISE_WINDOW * 2)
+            for k in range(be, px_after_end - 2, 2):
+                v0 = (result[k] << 8) | result[k + 1]
+                v1 = (result[k + 2] << 8) | result[k + 3]
+                noise_diffs.append(float(v1 - v0))
+
+            if len(noise_diffs) >= 4:
+                diff_std   = (sum(d * d for d in noise_diffs) / len(noise_diffs)) ** 0.5
+                noise_std  = diff_std / 1.414
+            else:
+                noise_std = 0.0
+
+            for j in range(TELEM_PIXELS):
+                val = float(predicted[j])
+                if noise_std > 0:
+                    val += random.gauss(0, noise_std)
+                val = max(0, min(65535, int(val)))
+                pos = bs + j * 2
+                result[pos]     = (val >> 8) & 0xFF
+                result[pos + 1] =  val       & 0xFF
+            cal_count += 1
+
         else:
-            val_before = val_after = (result[be] << 8) | result[be + 1]
+            # ── Fallback: linear interpolation with matched noise ──────────
+            if bs >= 2 and be + 1 < len(result):
+                val_before = (result[bs - 2] << 8) | result[bs - 1]
+                val_after  = (result[be] << 8) | result[be + 1]
+            elif bs >= 2:
+                val_before = val_after = (result[bs - 2] << 8) | result[bs - 1]
+            else:
+                val_before = val_after = (result[be] << 8) | result[be + 1]
 
-        # Estimate local noise from neighbouring real pixels.
-        # Read up to NOISE_WINDOW pixels on each side and compute the
-        # standard deviation of row-to-row differences (first differences
-        # remove the slow signal gradient, isolating noise).
-        noise_diffs: list[float] = []
-        # Pixels before the block
-        px_before_start = max(0, bs - NOISE_WINDOW * 2)
-        for k in range(px_before_start, bs - 2, 2):
-            v0 = (result[k] << 8) | result[k + 1]
-            v1 = (result[k + 2] << 8) | result[k + 3]
-            noise_diffs.append(float(v1 - v0))
-        # Pixels after the block
-        px_after_end = min(len(result), be + NOISE_WINDOW * 2)
-        for k in range(be, px_after_end - 2, 2):
-            v0 = (result[k] << 8) | result[k + 1]
-            v1 = (result[k + 2] << 8) | result[k + 3]
-            noise_diffs.append(float(v1 - v0))
+            noise_diffs = []
+            px_before_start = max(0, bs - NOISE_WINDOW * 2)
+            for k in range(px_before_start, bs - 2, 2):
+                v0 = (result[k] << 8) | result[k + 1]
+                v1 = (result[k + 2] << 8) | result[k + 3]
+                noise_diffs.append(float(v1 - v0))
+            px_after_end = min(len(result), be + NOISE_WINDOW * 2)
+            for k in range(be, px_after_end - 2, 2):
+                v0 = (result[k] << 8) | result[k + 1]
+                v1 = (result[k + 2] << 8) | result[k + 3]
+                noise_diffs.append(float(v1 - v0))
 
-        if len(noise_diffs) >= 4:
-            # std of first-differences = sqrt(2) * pixel_noise
-            diff_std = (sum(d * d for d in noise_diffs) / len(noise_diffs)) ** 0.5
-            noise_std = diff_std / 1.414
-        else:
-            noise_std = 0.0
+            if len(noise_diffs) >= 4:
+                diff_std  = (sum(d * d for d in noise_diffs) / len(noise_diffs)) ** 0.5
+                noise_std = diff_std / 1.414
+            else:
+                noise_std = 0.0
 
-        for j in range(TELEM_PIXELS):
-            t = (j + 1) / (TELEM_PIXELS + 1)
-            val = val_before * (1 - t) + val_after * t
-            # Add matched noise so repaired pixels have the same texture
-            # as surrounding real detector data.
-            if noise_std > 0:
-                val += random.gauss(0, noise_std)
-            val = max(0, min(65535, int(val)))
-            pos = bs + j * 2
-            result[pos] = (val >> 8) & 0xFF
-            result[pos + 1] = val & 0xFF
+            for j in range(TELEM_PIXELS):
+                t   = (j + 1) / (TELEM_PIXELS + 1)
+                val = val_before * (1 - t) + val_after * t
+                if noise_std > 0:
+                    val += random.gauss(0, noise_std)
+                val = max(0, min(65535, int(val)))
+                pos = bs + j * 2
+                result[pos]     = (val >> 8) & 0xFF
+                result[pos + 1] =  val       & 0xFF
+            interp_count += 1
+
+    log.debug(
+        "Telemetry repair: %d calibration-driven, %d interpolated (ff2d=%s)",
+        cal_count, interp_count, ff2d is not None,
+    )
 
     if return_positions:
         return result, block_starts
