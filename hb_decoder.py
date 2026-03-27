@@ -97,6 +97,27 @@ log = logging.getLogger("hb_decoder")
 # ║  Protocol Constants (confirmed from ff.txt analysis)
 # ╚══════════════════════════════════════════════════════════════════════════════
 
+# ╔══════════════════════════════════════════════════════════════════════════════
+# ║  Diagnostic State
+# ╚══════════════════════════════════════════════════════════════════════════════
+_fill_call_count = 0
+
+def _verify_fill_written(result_segment, bs, be, predicted):
+    """Q4 Check: Spot-check that predicted values were actually written to the result."""
+    written = []
+    for byte_pos in range(bs, be, 2):
+        if byte_pos + 1 < len(result_segment):
+            val = (result_segment[byte_pos] << 8) | result_segment[byte_pos + 1]
+            written.append(val)
+    expected = [int(p) for p in predicted[:len(written)]]
+    match = sum(1 for w, e in zip(written, expected) if abs(w-e) < 5)
+    print(f"[FILL VERIFY] {match}/{len(written)} pixels correctly written")
+    if match < len(written) * 0.9:
+        print("  WARNING: Fill writes are not persisting in result_segment!")
+        print(f"  First 5 written: {written[:5]}")
+        print(f"  First 5 expected: {expected[:5]}")
+
+
 MAGIC = 0x072D
 PORT_MARKER = 0x07D0  # 2000 decimal — appears in every session frame
 
@@ -267,6 +288,7 @@ class DecodedCapture:
     scanlines: list[Scanline] = field(default_factory=list)
     events: list[ScanEvent] = field(default_factory=list)
     expose_trigger_idx: int = -1
+    repair_mask: np.ndarray | None = None
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════
@@ -680,31 +702,26 @@ def _detect_echo_end(payload: bytes, min_echo: int = 30,
         return 30
 
     # ── Pass 1: structural anchor (0x0001 … 0x0034) ──────────────────
-    #   Only search within a reasonable window (bytes 30-160) to avoid
-    #   false positives from the pixel data further into the payload.
-    #   Support both plain (00 34) and byte-stuffed (20 34) variants.
-    ANCHOR_LIMIT = min(160, max_scan, len(payload) - 1)
-    last_anchor = -1
-    for off in range(32, ANCHOR_LIMIT):
-        if payload[off + 1] != 0x34:
-            continue
-        if payload[off] not in (0x00, 0x20):
-            continue
-        if off < 4:
-            continue
-        if payload[off - 3] != 0x01:
-            continue
-        if payload[off - 4] not in (0x00, 0x20):
-            continue
-        last_anchor = off + 2
-    if last_anchor > 30:
-        # For telemetry frames with known index, validate against expected size
-        if frame_index >= 0 and frame_index % 10 == 0:
-            expected = 30 + (frame_index // 10 + 1) * 8
-            if last_anchor != expected:
-                log.debug("Frame %d: anchor echo=%d, formula echo=%d",
-                          frame_index, last_anchor, expected)
-        return last_anchor
+    #   Only search within a narrow window. Fallback to formula.
+    ANCHOR_LIMIT = min(150, max_scan, len(payload) - 1)
+    found_echo = -1
+    for off in range(30, ANCHOR_LIMIT):
+        # Explicit 0x0001 .... 0x0034 check
+        if payload[off+1] == 0x34 and payload[off] in (0x00, 0x20):
+            if off >= 4 and payload[off-3] == 0x01 and payload[off-4] in (0x00, 0x20):
+                found_echo = off + 2
+                break
+                
+    if frame_index >= 0 and frame_index % 10 == 0:
+        # Formula-driven expectation for telemetry frames
+        expected = 30 + (frame_index // 10 + 1) * 8
+        # Prefer found anchor if close, otherwise trust formula
+        if found_echo > 0 and abs(found_echo - expected) < 16:
+            return found_echo
+        return expected
+    
+    # Non-telemetry frames (N%10 != 0) are strictly 30 bytes
+    return 30
 
     # ── Telemetry frame but anchor not found — use formula as fallback
     if frame_index >= 0 and frame_index % 10 == 0:
@@ -887,96 +904,155 @@ def _parse_telemetry_block(block: bytes | bytearray) -> dict:
     }
 
 
+
+DEBUG_FILL = True
+_debug_holes_count = 0
+_debug_col_log = []
+
+def _safe_dose_sample(segment: bytearray, start_idx: int, direction: int, max_steps: int = 20) -> tuple[int | None, bool]:
+    pixels = []
+    idx = start_idx
+    step_bytes = direction * 2
+    for _ in range(max_steps):
+        if idx < 0 or idx + 1 >= len(segment):
+            break
+        val = (segment[idx] << 8) | segment[idx + 1]
+        pixels.append(val)
+        idx += step_bytes
+        
+    if not pixels:
+        return None, False
+        
+    median_val = __import__('numpy').median(pixels)
+    walk_triggered = False
+    for i, p in enumerate(pixels):
+        if abs(p - median_val) / max(median_val, 1) < 0.15:
+            if i > 0: walk_triggered = True
+            return p, walk_triggered
+    return int(median_val), True
+
+def _detect_hole_column(global_byte_offset: int, img_height: int) -> int:
+    return global_byte_offset // (img_height * 2)
+
+def _validate_calibration_alignment(ff_shape, predicted) -> bool:
+    import numpy as np
+    import logging
+    log = logging.getLogger(__name__)
+    if np.std(ff_shape) > 1e-5 and np.std(predicted) > 1e-5:
+        corr = np.corrcoef(ff_shape, predicted)[0, 1]
+        if corr < 0.85:
+            log.warning("Calibration validation warning: correlation %.2f is below 0.85, using linear fallback", corr)
+            return False
+    return True
+
 def _calibration_driven_fill(
     block_start: int,
     telem: dict,
     segment: bytearray,
-    ff2d: np.ndarray | None,
+    ff2d,
     ff2d_mean: float,
     segment_row_offset: int = 0,
-) -> np.ndarray | None:
-    """Predict the 36 missing pixels using calibration data.
+    segment_col_offset: int = 0,
+) -> 'np.ndarray | None':
+    global _fill_call_count, _debug_holes_count
+    import logging
+    import numpy as np
+    log = logging.getLogger(__name__)
 
-    Uses a three-source prediction:
-      1. **Flat-field shape** — the per-row gain profile from the 2-D
-         flat-field image tells us the *relative* expected signal at each
-         of the 36 missing rows.
-      2. **ADC reference scale** — the 21 ADC readings from the telemetry
-         block encode the detector's real-time global gain.  We compare
-         their mean against the flat-field's calibrated ADC mean to derive
-         a per-block gain factor.
-      3. **Neighbour anchor** — we scale the flat-field prediction so that
-         it matches the actual pixel values immediately above and below the
-         gap, ensuring a smooth, artefact-free join.
-
-    Returns a float32 array of 36 predicted pixel values (big-endian
-    uint16 range, 0–65535), or None if prediction is not possible.
-    """
     TELEM_SIZE   = 72
-    TELEM_PIXELS = 36  # TELEM_SIZE // 2
+    TELEM_PIXELS = 36
     bs = block_start
     be = bs + TELEM_SIZE
 
-    # ── 1. Collect neighbour anchor values ────────────────────────────────
-    FLANK = 12  # pixels on each side to use for brightness matching
-    pixels_above: list[float] = []
-    pixels_below: list[float] = []
+    # Q1 Check: confirmed execution
+    exact_col_idx = _detect_hole_column((segment_col_offset * 1316 * 2) + (segment_row_offset * 2) + bs, 1316)
+    _fill_call_count += 1
+    print(f"[FILL CALLED] count={_fill_call_count}, col={exact_col_idx}, "
+          f"bs={bs}, be={be}, len(segment)={len(segment)}")
 
-    for k in range(bs - FLANK * 2, bs, 2):
-        if k >= 0:
-            pixels_above.append(float((segment[k] << 8) | segment[k + 1]))
-    for k in range(be, be + FLANK * 2, 2):
-        if k + 1 < len(segment):
-            pixels_below.append(float((segment[k] << 8) | segment[k + 1]))
-
-    if not pixels_above and not pixels_below:
-        return None  # no anchor — fall back to interpolation
-
-    anchor_above = float(np.mean(pixels_above)) if pixels_above else None
-    anchor_below = float(np.mean(pixels_below)) if pixels_below is not None else (anchor_above or 0.0)
-
-
-
-    # ── 2. Build baseline prediction from linear interpolation ───────────
-    #   Even without the flat-field we can produce a ramp; the flat-field
-    #   then warps the ramp to follow the detector's per-row gain shape.
-    val_top = anchor_above if anchor_above is not None else (anchor_below or 0.0)
-    val_bot = anchor_below if anchor_below is not None else (anchor_above or 0.0)
+    val_top, walk_top = _safe_dose_sample(segment, bs - 2, -1, max_steps=20)
+    val_bot, walk_bot = _safe_dose_sample(segment, be, 1, max_steps=20)
+    
+    val_top = float(val_top) if val_top is not None else float(val_bot or 0.0)
+    val_bot = float(val_bot) if val_bot is not None else float(val_top or 0.0)
+    if val_top == 0.0 and val_bot == 0.0:
+        return None
 
     t_arr = np.linspace(1.0 / (TELEM_PIXELS + 1), TELEM_PIXELS / (TELEM_PIXELS + 1),
                         TELEM_PIXELS, dtype=np.float32)
     predicted = val_top * (1.0 - t_arr) + val_bot * t_arr
 
-    # ── 3. Flat-field shape warp ─────────────────────────────────────────
-    # We now have a true 1D flat-field row profile (normalized around 1.0).
-    # We can inject the exact detector signature for these 36 pixels.
-    # We must calculate which physical rows these pixels correspond to.
     first_px  = bs // 2
-    first_row = (segment_row_offset + first_px) % 1316 # 1316 is PANO_DEFAULT_HEIGHT
+    first_row = (segment_row_offset + first_px) % 1316
     row_indices = [(first_row + j) % 1316 for j in range(TELEM_PIXELS)]
+    
+    global_byte_offset = (segment_col_offset * 1316 * 2) + (segment_row_offset * 2) + bs
+    exact_col_idx = _detect_hole_column(global_byte_offset, 1316)
 
+    global _debug_col_log
+    
+    predicted_warped = predicted.copy()
     if ff2d is not None and len(ff2d) > max(row_indices):
-        col_idx = min(max(telem.get("col", 0), 0), ff2d.shape[1] - 1)
+        col_idx = min(max(exact_col_idx, 0), ff2d.shape[1] - 1)
         ff_shape = np.array([ff2d[r, col_idx] for r in row_indices], dtype=np.float32)
         
-        # Detrend the flat-field chunk to isolate purely the high-frequency detector texture.
-        # We divide the 36-pixel shape by a linear ramp from its own start to end,
-        # yielding a texture array strictly anchored at 1.0 on both edges.
         ff_trend = np.linspace(ff_shape[0], ff_shape[-1], len(ff_shape), dtype=np.float32)
         ff_trend = np.maximum(ff_trend, 1.0)
         ff_texture = ff_shape / ff_trend
         
-        # Multiply our local neighbour-anchored interpolation ramp by exactly this texture.
-        # This perfectly preserves the detector signature without breaking the boundary continuity.
-        predicted = predicted * ff_texture
+        predicted_warped = predicted_warped * ff_texture
+        
+        if not _validate_calibration_alignment(ff_shape, predicted_warped):
+            pass
+        else:
+            predicted = predicted_warped
+            
+    if DEBUG_FILL and _debug_holes_count < 5:
+        _debug_col_log.append({
+            "hole_number": _debug_holes_count + 1,
+            "exact_col_idx": exact_col_idx,
+            "global_byte_offset": global_byte_offset,
+            "computed_col": exact_col_idx, # global_byte_offset // (img_height * 2) is just exact_col_idx
+            "val_top": val_top,
+            "val_bot": val_bot,
+            "walk_top": walk_top,
+            "walk_bot": walk_bot,
+            "row_start": row_indices[0],
+            "row_end": row_indices[-1],
+        })
+        log.info(f"--- DEBUG_FILL HOLE {_debug_holes_count+1} ---")
+        log.info(f"Target Column: {exact_col_idx} (from global byte offset: {global_byte_offset})")
+        log.info(f"Dose Bounds: top={val_top:.0f} bot={val_bot:.0f} (Walk top={walk_top}, Walk bot={walk_bot})")
+        log.info(f"Row Indices (target patch): {row_indices[0]} to {row_indices[-1]}")
+        
+        import os
+        from PIL import Image
+        flank_extract = 20
+        raw_pixels = []
+        for i in range(max(0, bs - flank_extract*2), min(len(segment), be + flank_extract*2), 2):
+            raw_pixels.append((segment[i] << 8) | segment[i+1])
+            
+        filled_pixels = list(raw_pixels)
+        for i, p in enumerate(predicted):
+            filled_pixels[patch_offset + i] = int(p)
+            
+        max_p = max(raw_pixels + filled_pixels + [1])
+        raw_arr = (np.array(raw_pixels) / max_p * 255).astype(np.uint8)
+        fill_arr = (np.array(filled_pixels) / max_p * 255).astype(np.uint8)
+        
+        img_arr = np.column_stack([np.tile(raw_arr, (50, 1)).T, np.zeros((len(raw_arr), 10), dtype=np.uint8), np.tile(fill_arr, (50, 1)).T])
+        Image.fromarray(img_arr).save(f"/tmp/debug_hole_{_debug_holes_count+1}.png")
+        log.info(f"Saved /tmp/debug_hole_{_debug_holes_count+1}.png")
+        
+        _debug_holes_count += 1
 
     return predicted
-
 
 def _repair_inline_telemetry(
     segment: bytearray,
     return_positions: bool = False,
     segment_row_offset: int = 0,
+    segment_col_offset: int = 0,
 ) -> bytearray | tuple[bytearray, list[int]]:
     """Replace inline telemetry blocks with calibration-driven predicted pixels.
 
@@ -1010,20 +1086,25 @@ def _repair_inline_telemetry(
     # Find all telemetry blocks by tail pattern.
     # Support both plain (00 01 XX XX 00 34) and byte-stuffed (20 01 XX XX 20 34).
     block_starts: list[int] = []
+    # Strict search for telemetry holes:
+    # Pattern: [00 01] [?? ??] [00 34] at 72-byte intervals
     for off in range(TELEM_SIZE - 2, len(segment) - 1):
+        # FAST SKIP: Tail signature is [00 34] (row param 52)
         if segment[off + 1] != 0x34:
             continue
-        # Check for tail byte before 0x34: either 0x00 or 0x20 (byte-stuffed)
         if segment[off] not in (0x00, 0x20):
             continue
-        # Check for 0x01 marker 4 bytes before 0x34
-        if off < 4:
+            
+        # Robust check: 0x00 0x01 should precede by 4 bytes
+        if off < 4 or segment[off-3] != 0x01:
             continue
-        if segment[off - 3] != 0x01:
+            
+        # Value check: Telemetry readings are around 2100-2400 (ADC counts)
+        ref_val = (segment[off-2] << 8) | segment[off-1]
+        if not (1800 < ref_val < 3000):
             continue
-        if segment[off - 4] not in (0x00, 0x20):
-            continue
-        blk_start = off + 2 - TELEM_SIZE
+
+        blk_start = off - (TELEM_SIZE - 2)
         if blk_start < 0:
             continue
         # Validate: the 72-byte block should contain multiple 0x20 or
@@ -1061,7 +1142,9 @@ def _repair_inline_telemetry(
 
         # ── Try calibration-driven prediction first ────────────────────
         predicted = _calibration_driven_fill(
-            bs, telem, result, ff2d, ff2d_mean, segment_row_offset,
+            bs, telem, result, ff2d, ff2d_mean, 
+            segment_row_offset=segment_row_offset,
+            segment_col_offset=segment_col_offset,
         )
 
         if predicted is not None and telem["adc_valid"]:
@@ -1094,6 +1177,9 @@ def _repair_inline_telemetry(
                 result[pos]     = (val >> 8) & 0xFF
                 result[pos + 1] =  val       & 0xFF
             cal_count += 1
+            
+            # Q4 Check: confirm writes landed
+            _verify_fill_written(result, bs, be, predicted)
 
         else:
             # ── Fallback: linear interpolation with matched noise ──────────
@@ -1245,8 +1331,11 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> tuple[list[Scan
             segment = bytearray(data[read_pos:hdr_pos])
             # The start of this chunk corresponds to a specific physical row wrapping on the detector
             segment_row_offset = (len(clean) // 2) % 1316
+            segment_col_offset = (len(clean) // 2) // 1316
             repaired, block_positions = _repair_inline_telemetry(
-                segment, return_positions=True, segment_row_offset=segment_row_offset
+                segment, return_positions=True, 
+                segment_row_offset=segment_row_offset,
+                segment_col_offset=segment_col_offset,
             )
             telem_blocks_repaired += (len(segment) - len(repaired) == 0)
             # Map block positions from segment-local to clean-stream-global
@@ -1270,8 +1359,12 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> tuple[list[Scan
             tail_limit = pos
     if tail_limit > read_pos:
         segment = bytearray(data[read_pos:tail_limit])
+        segment_row_offset = (len(clean) // 2) % 1316
+        segment_col_offset = (len(clean) // 2) // 1316
         repaired, block_positions = _repair_inline_telemetry(
             segment, return_positions=True,
+            segment_row_offset=segment_row_offset,
+            segment_col_offset=segment_col_offset
         )
         base = len(clean)
         for bp in block_positions:
@@ -1308,8 +1401,28 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> tuple[list[Scan
         img_width = len(pixel_data) // (img_height * 2)
         usable_bytes = img_width * img_height * 2
 
-    pixels = np.frombuffer(pixel_data[:usable_bytes], dtype=">u2").copy()
-    img_array = pixels.reshape(img_width, img_height)  # (cols, rows)
+    # Q3 Check: Stream Start
+    first_pixels = [(clean[i] << 8) | clean[i+1] for i in range(0, 40, 2)]
+    print(f"[STREAM START CHECK] First 20 pixel values: {first_pixels}")
+
+    # Q2 Check: Reshape Logic
+    total_pixels = len(clean) // 2
+    actual_width = total_pixels // img_height
+    usable_bytes = actual_width * img_height * 2
+    remainder = total_pixels % img_height
+    
+    print(f"[RESHAPE CHECK] len(clean)={len(clean)}, "
+          f"total_pixels={total_pixels}, "
+          f"img_height={img_height}, "
+          f"computed_width={actual_width}, "
+          f"remainder={remainder}")
+    
+    # Strip garbage tail before reshape
+    pixels = np.frombuffer(clean[:usable_bytes], dtype=">u2").copy()
+    img_array = pixels.reshape(actual_width, img_height)
+    
+    img_width = actual_width
+    print(f"TOTAL FILL CALLS: {_fill_call_count}")  # (cols, rows)
 
     log.info(
         "Panoramic: %d columns x %d rows, pixel range %d-%d, mean %.0f",
@@ -1318,100 +1431,13 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> tuple[list[Scan
     )
 
     # ── 5b. 2D telemetry repair ──────────────────────────────────────────
-    #   The 1D repair (step 3) filled overwritten pixels with flat-field physics.
-    #   Now we replace the underlying missing jaw structure by finding a DONOR 
-    #   column from a different frame group that has REAL anatomy at those rows.
-    #   We rigorously avoid any donor columns that have overlapping telemetry 
-    #   within the affected row + FLANK range, preventing horizontal smearing!
-    TELEM_SIZE = 72
-    TELEM_PIXELS = TELEM_SIZE // 2  # 36 pixels per block
-    FLANK = 8  # rows above/below repair zone for brightness matching
+    # Disabled: The 1D flat-field texture fill is structurally seamless.
+    # Replacing it with cloned adjacent tissue introduces mathematical noise 
+    # and jagged boundaries along image gradients.
 
-    # Build exhaustive set of all repaired pixel regions (including flanks)
-    repaired_positions: set[tuple[int, int]] = set()
-    for byte_off in repaired_byte_offsets:
-        pixel_off = byte_off // 2
-        col = pixel_off // img_height
-        row = pixel_off % img_height
-        if 0 <= col < img_width:
-            r_start = max(0, row - FLANK)
-            r_end = min(img_height, row + TELEM_PIXELS + FLANK)
-            for r in range(r_start, r_end):
-                repaired_positions.add((col, r))
-
-    MAX_DONOR_SEARCH = 260  # must span at least one full 248-col group
-
-    telem_2d_count = 0
-    for byte_off in repaired_byte_offsets:
-        pixel_off = byte_off // 2
-        col = pixel_off // img_height
-        row = pixel_off % img_height
-        if col < 0 or col >= img_width:
-            continue
-        row_end = min(row + TELEM_PIXELS, img_height)
-        if row_end <= row or row < FLANK or row_end + FLANK > img_height:
-            continue
-
-        donor_left = -1
-        donor_right = -1
-
-        # Find clean donor columns with NO repairs in the required vertical band
-        for d in range(1, MAX_DONOR_SEARCH):
-            if donor_left < 0 and col - d >= 0:
-                is_clean = True
-                for r in range(row - FLANK, row_end + FLANK):
-                    if (col - d, r) in repaired_positions:
-                        is_clean = False
-                        break
-                if is_clean:
-                    donor_left = col - d
-                    
-            if donor_right < 0 and col + d < img_width:
-                is_clean = True
-                for r in range(row - FLANK, row_end + FLANK):
-                    if (col + d, r) in repaired_positions:
-                        is_clean = False
-                        break
-                if is_clean:
-                    donor_right = col + d
-                    
-            if donor_left >= 0 and donor_right >= 0:
-                break
-
-        if donor_left < 0 and donor_right < 0:
-            continue  # no donor anywhere — keep 1D physics repair
-
-        # Brightness-match each donor using the flanking rows (which are real data)
-        local_flank_above = img_array[col, row - FLANK:row].astype(np.float64)
-        local_flank_below = img_array[col, row_end:row_end + FLANK].astype(np.float64)
-        local_mean = np.mean(np.concatenate([local_flank_above, local_flank_below]))
-
-        acc = np.zeros(row_end - row, dtype=np.float64)
-        wt = 0.0
-
-        for donor_col in (donor_left, donor_right):
-            if donor_col < 0:
-                continue
-            d = abs(col - donor_col)
-            d_above = img_array[donor_col, row - FLANK:row].astype(np.float64)
-            d_below = img_array[donor_col, row_end:row_end + FLANK].astype(np.float64)
-            donor_mean = np.mean(np.concatenate([d_above, d_below]))
-            
-            offset = local_mean - donor_mean
-            donor_pixels = img_array[donor_col, row:row_end].astype(np.float64)
-            shifted = donor_pixels + offset
-            w = 1.0 / max(d, 1)
-            acc += shifted * w
-            wt += w
-
-        if wt > 0:
-            repaired = np.clip(acc / wt, 0, 65535).astype(np.uint16)
-            img_array[col, row:row_end] = repaired
-            telem_2d_count += 1
-
-    if telem_2d_count:
-        log.info("2D telemetry repair: %d blocks reconstructed "
-                 "(brightness-matched cross-group donors)", telem_2d_count)
+        # BUG 1 FIX: Ensure 2D repair logic is COMPLETELY terminated!
+    if hasattr(sys, '_CALLED_2D_REPAIR') and sys._CALLED_2D_REPAIR:
+        raise RuntimeError("FATAL OVERLAP: Legacy 2D spatial block-copy algorithm triggered!")
 
     img_2d = img_array.T.astype(np.float32)  # (height, width)
     repaired_rows: list[int] = []
@@ -1547,6 +1573,139 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> tuple[list[Scan
             _repair_mask[r:min(r + TELEM_PX, img_height), c] = 255
 
     return scanlines, _repair_mask
+
+
+def _protected_row_smooth(img_array: np.ndarray, 
+                           hole_columns: list[int], 
+                           smooth_kernel: int = 3,
+                           protection_radius: int = 2) -> np.ndarray:
+    """
+    BUG 5 FIX: Runs horizontal row smoothing everywhere EXCEPT within 
+    protection_radius pixels of any confirmed telemetry hole column.
+    
+    Prevents:
+    - Blurring of calibration fill boundaries
+    - Corruption of dose sample pixels used by _safe_dose_sample
+    - Loss of tooth/bone edge sharpness near hole zones
+    
+    Args:
+        img_array: 2D numpy array (rows x cols), float or uint16
+        hole_columns: list of exact_col_idx values from _detect_hole_column
+        smooth_kernel: width of horizontal smoothing window (default 3)
+        protection_radius: cols on each side of hole to leave unsmoothed
+    
+    Returns:
+        Smoothed image array with hole zones fully preserved
+    """
+    import numpy as np
+    from scipy.ndimage import uniform_filter1d
+
+    if img_array.shape[1] == 0:
+        return img_array
+
+    # Build protection mask — True means DO NOT SMOOTH this column
+    protected = np.zeros(img_array.shape[1], dtype=bool)
+    for col in hole_columns:
+        if 0 <= col < img_array.shape[1]:
+            lo = max(0, col - protection_radius)
+            hi = min(img_array.shape[1], col + protection_radius + 1)
+            protected[lo:hi] = True
+
+    smoothed = uniform_filter1d(img_array.astype(float), 
+                                 size=smooth_kernel, 
+                                 axis=1)
+
+    # Restore protected columns from original
+    result = smoothed.copy()
+    result[:, protected] = img_array[:, protected]
+
+    return result.astype(img_array.dtype)
+
+
+def _save_glow_region_diff(raw_img: np.ndarray,
+                            repaired_img: np.ndarray,
+                            hole_columns: list[int],
+                            output_path: str = "/tmp/bug2_glow_diff.png",
+                            row_context: int = 100,
+                            col_context: int = 60) -> None:
+    """
+    Saves a side-by-side PNG showing raw vs repaired for each 
+    of the first 3 hole columns, cropped to the glow region 
+    (brightest 100 rows surrounding the hole).
+    
+    Use this to visually confirm:
+    - No edge tear at hole boundary (top/bottom of fill)
+    - No brightness step between fill and surrounding tissue
+    - Smooth gradient continuity across the hole
+    """
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    if not hole_columns:
+        log.warning("No hole columns provided for glow region diff.")
+        return
+
+    panels = []
+    for col in hole_columns[:3]:
+        if col >= raw_img.shape[1]: continue
+        
+        # Find brightest row region near this column
+        col_slice = raw_img[:, max(0, col-5):col+5].mean(axis=1)
+        brightest_row = int(np.argmax(col_slice))
+        r0 = max(0, brightest_row - row_context // 2)
+        r1 = min(raw_img.shape[0], r0 + row_context)
+        c0 = max(0, col - col_context // 2)
+        c1 = min(raw_img.shape[1], c0 + col_context)
+
+        raw_crop = raw_img[r0:r1, c0:c1].astype(float)
+        rep_crop = repaired_img[r0:r1, c0:c1].astype(float)
+
+        if raw_crop.size == 0 or rep_crop.size == 0: continue
+
+        # Normalize each crop independently for visibility
+        def norm(arr):
+            mn, mx = arr.min(), arr.max()
+            return ((arr - mn) / max(mx - mn, 1) * 255).astype(np.uint8)
+
+        raw_norm = norm(raw_crop)
+        rep_norm = norm(rep_crop)
+
+        # Diff map — amplify differences 3x for visibility
+        diff = np.clip(np.abs(rep_crop - raw_crop) / max(raw_crop.max(), 1) * 3 * 255, 
+                       0, 255).astype(np.uint8)
+
+        # Stack raw | repaired | diff horizontally
+        spacer = np.zeros((raw_norm.shape[0], 5), dtype=np.uint8)
+        panel = np.hstack([raw_norm, spacer, rep_norm, spacer, diff])
+        panels.append(panel)
+
+    if not panels:
+        return
+
+    # Stack all hole panels vertically
+    max_w = max(p.shape[1] for p in panels)
+    padded_panels = []
+    for p in panels:
+        if p.shape[1] < max_w:
+            p_pad = np.pad(p, ((0, 0), (0, max_w - p.shape[1])), mode='constant')
+            padded_panels.append(p_pad)
+        else:
+            padded_panels.append(p)
+            
+    spacer_h = np.zeros((10, max_w), dtype=np.uint8)
+    final_rows = []
+    for i, p in enumerate(padded_panels):
+        final_rows.append(p)
+        if i < len(padded_panels) - 1:
+            final_rows.append(spacer_h)
+    
+    final = np.vstack(final_rows)
+
+    img_out = Image.fromarray(final)
+    draw = ImageDraw.Draw(img_out)
+    draw.text((5, 5), "RAW | REPAIRED | DIFF (x3)", fill=255)
+    img_out.save(output_path)
+    log.info(f"Saved glow region diff: {output_path}")
 
 
 def _extract_events(data: bytes) -> list[ScanEvent]:
@@ -1948,10 +2107,26 @@ def reconstruct_image(
         img_norm = np.power(img_norm, WWE_GAMMA)
 
     # Horizontal deband: soften frame-boundary gain steps (sigma=4 cols).
-    # Each TCP frame (~25 cols) may have slightly different detector gain,
-    # creating visible vertical banding.  A wider Gaussian softens these
-    # step transitions without significant loss of horizontal anatomy.
-    img_norm = gaussian_filter1d(img_norm, sigma=4.0, axis=1)
+    # BUG 5 FIX: Use protected smoothing to preserve telemetry hole boundaries
+    # and tooth/bone contrast near repaired zones.
+    detected_hole_cols = []
+    if repair_mask is not None:
+        detected_hole_cols = sorted(list(set(np.where(np.any(repair_mask == 255, axis=0))[0])))
+    
+    img_norm = _protected_row_smooth(img_norm, hole_columns=detected_hole_cols, smooth_kernel=5, protection_radius=2)
+
+    # Save glow region diagnostic diff (Bug 2 Validation)
+    try:
+        if repair_mask is not None:
+            # We use img_f (linear domain) for the raw vs repaired diff before gamma/MUSICA
+            # We simulate "raw" by restoring the 0x20 telemetry noise where the mask is 255
+            # Actually, to be truly diagnostic, we want the ORIGINAL raw data, but img_f 
+            # at this point is already repaired. We can mock the hole by zeroing repaired pixels.
+            raw_mock = img_f.copy()
+            raw_mock[repair_mask == 255] = 0
+            _save_glow_region_diff(raw_mock, img_f, detected_hole_cols)
+    except Exception as exc:
+        log.debug("Glow region diff diagnostic failed: %s", exc)
 
     # MUSICA Laplacian pyramid (4 detail scales + residual)
     MUSICA_SIGMAS = [2, 8, 32, 128]
@@ -3022,7 +3197,7 @@ def cmd_parse(args: argparse.Namespace) -> int:
         log.info("Scanline PNGs saved: %s (%d files)", sl_dir, len(paths))
 
         # Reconstruct composite image
-        img = reconstruct_image(capture.scanlines)
+        img = reconstruct_image(capture.scanlines, repair_mask=capture.repair_mask)
         if img:
             composite_path = outdir / "panoramic_reconstructed.png"
             img.save(composite_path)
