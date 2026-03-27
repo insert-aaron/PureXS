@@ -945,29 +945,24 @@ def _calibration_driven_fill(
                         TELEM_PIXELS, dtype=np.float32)
     predicted = val_top * (1.0 - t_arr) + val_bot * t_arr
 
-    #      near-constant across columns, suggesting they are NOT live ADC
-    #      light-reference readings — the real layout is still TBD).
-    #
-    # Until both are resolved, the neighbour-anchored linear ramp below
-    # is strictly better than blending in a stale/wrong flat-field warp.
-    #
-    # Re-enable by uncommenting the block below once:
-    #   1. A fresh blank exposure is captured and saved as flat_field_raw.bin
-    #   2. adc_layout_verify.py shows Pearson r > 0.70 with the pixel stream
-    #
-    # ── (disabled warp code preserved for future use) ────────────────────
-    # if ff2d is not None and telem["adc_valid"]:
-    #     col_idx = min(max(telem["col"], 0), ff2d.shape[1] - 1)
-    #     first_px  = bs // 2
-    #     first_row = (segment_row_offset + first_px) % PANO_DEFAULT_HEIGHT
-    #     row_indices = [(first_row + j) % PANO_DEFAULT_HEIGHT for j in range(TELEM_PIXELS)]
-    #     ff_rows = np.array([ff2d[r, col_idx] for r in row_indices], dtype=np.float32)
-    #     ff_shape = ff_rows / max(float(ff_rows.mean()), 0.01)
-    #     gain_scalar = float(np.clip(telem["adc_mean"] / ff2d_mean, 0.6, 1.4)) if ff2d_mean > 0 else 1.0
-    #     anchor_mid = (val_top + val_bot) / 2.0
-    #     if anchor_mid > 0:
-    #         predicted = 0.70 * (ff_shape * anchor_mid * gain_scalar) + 0.30 * predicted
-    _ = ff2d  # suppress unused-variable warning while disabled
+    # ── 3. Flat-field shape warp ─────────────────────────────────────────
+    # We now have a true 1D flat-field row profile (normalized around 1.0).
+    # We can inject the exact detector signature for these 36 pixels.
+    # We must calculate which physical rows these pixels correspond to.
+    first_px  = bs // 2
+    first_row = (segment_row_offset + first_px) % 1316 # 1316 is PANO_DEFAULT_HEIGHT
+    row_indices = [(first_row + j) % 1316 for j in range(TELEM_PIXELS)]
+
+    if ff2d is not None and len(ff2d) > max(row_indices):
+        col_idx = min(max(telem.get("col", 0), 0), ff2d.shape[1] - 1)
+        ff_shape = np.array([ff2d[r, col_idx] for r in row_indices], dtype=np.float32)
+        ff_shape = ff_shape / max(float(ff_shape.mean()), 0.01)
+        
+        # We blend the pure shape-warp anchored locally with the baseline ramp.
+        # anchor_mid holds the true local ADU block intensity (from neighbors).
+        anchor_mid = (val_top + val_bot) / 2.0
+        if anchor_mid > 0:
+            predicted = 0.70 * (ff_shape * anchor_mid) + 0.30 * predicted
 
     return predicted
 
