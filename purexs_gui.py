@@ -398,6 +398,7 @@ class PureXSApp(ctk.CTk):
         self._last_pano_path: str = ""            # PHASE 3 — path to last saved panoramic PNG
         self._last_upload_args: tuple = ()        # PHASE 5 — (patient_id, file_path, type, title)
         self._purechart_searching: bool = False   # PHASE 2 — True while bg search in flight
+        self._profile_photo: ImageTk.PhotoImage | None = None  # prevent GC for profile pic
         if HAS_PURECHART:
             self._purechart_loader = PureChartPatientLoader(self._facility_token)
             self._purechart_uploader = PureChartUploader(self._facility_token)
@@ -647,7 +648,8 @@ class PureXSApp(ctk.CTk):
         self._recent_combo.grid(row=0, column=1, sticky="w")
 
         # PHASE 1+2 — PureChart patient search
-        purechart_row = ctk.CTkFrame(patient_frame, fg_color="transparent")
+        self._purechart_row = ctk.CTkFrame(patient_frame, fg_color="transparent")
+        purechart_row = self._purechart_row
         purechart_row.pack(fill="x", padx=12, pady=(0, 4))
         ctk.CTkLabel(purechart_row, text="PureChart:", width=65, anchor="e").grid(
             row=0, column=0, padx=(0, 4), sticky="e"
@@ -675,6 +677,59 @@ class PureXSApp(ctk.CTk):
             text_color="#757575",
         )
         self._purechart_status.grid(row=2, column=1, sticky="w")
+
+        # ── Patient profile card (shown when PureChart patient selected) ───
+        self._profile_card = ctk.CTkFrame(patient_frame, fg_color="#162029", corner_radius=8)
+        # Hidden by default — shown when a patient is selected
+        self._profile_card_visible = False
+
+        profile_top = ctk.CTkFrame(self._profile_card, fg_color="transparent")
+        profile_top.pack(fill="x", padx=10, pady=(8, 4))
+
+        # Circular-ish avatar area (80x80 canvas)
+        self._profile_avatar_canvas = tk.Canvas(
+            profile_top, width=64, height=64,
+            bg="#162029", highlightthickness=0,
+        )
+        self._profile_avatar_canvas.pack(side="left", padx=(0, 10))
+        # Draw placeholder initials circle
+        self._profile_avatar_canvas.create_oval(2, 2, 62, 62, fill="#37474F", outline="#546E7A", width=2)
+        self._profile_initials = self._profile_avatar_canvas.create_text(
+            32, 32, text="?", fill="#B0BEC5",
+            font=("Helvetica", 18, "bold"),
+        )
+
+        # Patient info labels (right of avatar)
+        profile_info = ctk.CTkFrame(profile_top, fg_color="transparent")
+        profile_info.pack(side="left", fill="both", expand=True)
+
+        self._profile_name_label = ctk.CTkLabel(
+            profile_info, text="",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color="#E0E0E0", anchor="w",
+        )
+        self._profile_name_label.pack(fill="x")
+
+        self._profile_mrn_label = ctk.CTkLabel(
+            profile_info, text="",
+            font=ctk.CTkFont(size=10),
+            text_color="#90A4AE", anchor="w",
+        )
+        self._profile_mrn_label.pack(fill="x")
+
+        self._profile_dob_label = ctk.CTkLabel(
+            profile_info, text="",
+            font=ctk.CTkFont(size=10),
+            text_color="#90A4AE", anchor="w",
+        )
+        self._profile_dob_label.pack(fill="x")
+
+        self._profile_phone_label = ctk.CTkLabel(
+            profile_info, text="",
+            font=ctk.CTkFont(size=10),
+            text_color="#90A4AE", anchor="w",
+        )
+        self._profile_phone_label.pack(fill="x")
 
         # PHASE 5 — Upload status bar with progress + retry
         upload_row = ctk.CTkFrame(patient_frame, fg_color="#162029", corner_radius=6)
@@ -3000,6 +3055,8 @@ class PureXSApp(ctk.CTk):
         self._pt_set_btn.configure(state="normal")
         self._pt_status_label.configure(text="", text_color="#EF5350")
         self._patient_banner.configure(text="")
+        self._selected_purechart = None
+        self._hide_profile_card()
 
         # Disable expose buttons
         self._update_expose_eligibility()
@@ -3351,6 +3408,7 @@ class PureXSApp(ctk.CTk):
         """User picked a patient from the PureChart dropdown — auto-fill fields."""
         if choice.startswith("("):
             self._selected_purechart = None
+            self._hide_profile_card()
             return
 
         # Find matching patient by display_name
@@ -3360,6 +3418,7 @@ class PureXSApp(ctk.CTk):
                 break
         else:
             self._selected_purechart = None
+            self._hide_profile_card()
             return
 
         pt = self._selected_purechart
@@ -3393,6 +3452,89 @@ class PureXSApp(ctk.CTk):
             f"(ID: {pt.id}, MRN: {pt.medical_record_number})",
             "info",
         )
+
+        # Show the profile card with patient info + avatar
+        self._show_profile_card(pt)
+
+    # ── Profile card helpers ──────────────────────────────────────────────
+
+    def _show_profile_card(self, pt: "PureChartPatient") -> None:
+        """Populate and show the patient profile card."""
+        self._profile_name_label.configure(text=f"{pt.first_name} {pt.last_name}")
+        self._profile_mrn_label.configure(text=f"MRN: {pt.medical_record_number}" if pt.medical_record_number else "")
+        self._profile_dob_label.configure(text=f"DOB: {pt.dob}" if pt.dob else "")
+        self._profile_phone_label.configure(text=f"Phone: {pt.phone}" if pt.phone else "")
+
+        # Reset avatar to initials
+        initials = ""
+        if pt.first_name:
+            initials += pt.first_name[0].upper()
+        if pt.last_name:
+            initials += pt.last_name[0].upper()
+        initials = initials or "?"
+        self._profile_avatar_canvas.delete("all")
+        self._profile_avatar_canvas.create_oval(2, 2, 62, 62, fill="#37474F", outline="#546E7A", width=2)
+        self._profile_initials = self._profile_avatar_canvas.create_text(
+            32, 32, text=initials, fill="#B0BEC5",
+            font=("Helvetica", 18, "bold"),
+        )
+        self._profile_photo = None
+
+        # Show the card (positioned after the PureChart search row)
+        if not self._profile_card_visible:
+            self._profile_card.pack(fill="x", padx=12, pady=(4, 4), after=self._purechart_row)
+            self._profile_card_visible = True
+
+        # Download profile picture in background if URL available
+        if pt.profile_picture_url:
+            threading.Thread(
+                target=self._download_profile_image,
+                args=(pt.profile_picture_url, pt.id),
+                daemon=True,
+            ).start()
+
+    def _hide_profile_card(self) -> None:
+        """Hide the patient profile card."""
+        if self._profile_card_visible:
+            self._profile_card.pack_forget()
+            self._profile_card_visible = False
+            self._profile_photo = None
+
+    def _download_profile_image(self, url: str, patient_id: str) -> None:
+        """Background thread: download profile picture and update avatar."""
+        try:
+            resp = requests.get(url, timeout=10)
+            if resp.status_code != 200:
+                return
+            self.after(0, self._set_profile_image, resp.content, patient_id)
+        except Exception as exc:
+            log.debug("Failed to download profile image: %s", exc)
+
+    def _set_profile_image(self, image_bytes: bytes, patient_id: str) -> None:
+        """Main-thread callback: set the avatar to the downloaded image."""
+        # Only apply if the same patient is still selected
+        if not self._selected_purechart or self._selected_purechart.id != patient_id:
+            return
+        try:
+            img = Image.open(io.BytesIO(image_bytes))
+            # Resize to fit avatar (60x60 with 2px padding = 64x64 canvas)
+            img = img.resize((60, 60), Image.LANCZOS)
+            # Create circular mask
+            mask = Image.new("L", (60, 60), 0)
+            from PIL import ImageDraw
+            draw = ImageDraw.Draw(mask)
+            draw.ellipse((0, 0, 59, 59), fill=255)
+            # Apply mask — paste onto dark background
+            bg = Image.new("RGBA", (60, 60), (22, 32, 41, 255))
+            img = img.convert("RGBA")
+            bg.paste(img, (0, 0), mask)
+
+            self._profile_photo = ImageTk.PhotoImage(bg)
+            self._profile_avatar_canvas.delete("all")
+            self._profile_avatar_canvas.create_oval(2, 2, 62, 62, fill="#162029", outline="#546E7A", width=2)
+            self._profile_avatar_canvas.create_image(32, 32, image=self._profile_photo, anchor="center")
+        except Exception as exc:
+            log.debug("Failed to render profile image: %s", exc)
 
     #endregion
 
