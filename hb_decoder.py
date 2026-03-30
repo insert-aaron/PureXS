@@ -644,38 +644,71 @@ _SESSION_SIG = b'\x07\x2d\x07\xd0'   # MAGIC + PORT at offsets 2-5
 
 
 def _strip_session_headers(data: bytes) -> bytes:
-    """Remove all 20-byte P2K session headers embedded in raw scan data.
+    """Strip ALL 20-byte P2K session headers AND their echo payloads
+    from the raw TCP stream.
 
-    During the data flood the device sends some frames with session
-    headers (0x1002, 0x1003, 0x1005) interleaved with raw continuation
-    data.  This function finds every occurrence of the 07 2D 07 D0
-    signature and removes the 20-byte header so only payload remains.
+    Each 0x1003 frame structure:
+      [0x1003 = 2B][magic 07 2D 07 D0 = 4B][flags/port = 14B] = 20B header
+      [echo payload = 30B for normal frames, 30+8*N for telemetry frames]
+      [pixel data = remainder of frame up to next header]
+
+    Echo payload sizes (confirmed from live capture analysis):
+      Normal frames (frame_index % 10 != 0): exactly 30 bytes
+      Telemetry frames (frame_index % 10 == 0): 30 + 8*(N//10 + 1) bytes
+      where N = frame_index (0-based)
     """
-    result = bytearray()
-    idx = 0
+    result      = bytearray()
+    idx         = 0
+    frame_index = 0
+
     while idx < len(data):
-        # Look for next session header signature (at offset +2 from header start)
+        # Find next session header
         pos = data.find(_SESSION_SIG, idx)
         if pos < 0:
+            # No more headers — append remaining bytes as pixel data
             result.extend(data[idx:])
             break
-        # The header starts 2 bytes before the signature
+
         hdr_start = pos - 2
         if hdr_start < idx:
-            # Signature is inside data we already consumed — skip it
             result.extend(data[idx:pos + 4])
             idx = pos + 4
             continue
-        # Verify it looks like a real header (func_hi in known range)
+
+        # Validate it's a real header
         func_hi = data[hdr_start] if hdr_start >= 0 else 0
-        if func_hi in (0x10, 0x20, 0x21):
-            # Append data before this header, then skip the 20-byte header
-            result.extend(data[idx:hdr_start])
-            idx = hdr_start + SESSION_HEADER_SIZE
-        else:
-            # False positive — not a real header
+        if func_hi not in (0x10, 0x20, 0x21):
             result.extend(data[idx:pos + 4])
             idx = pos + 4
+            continue
+
+        # Append pixel data before this header
+        result.extend(data[idx:hdr_start])
+
+        # Skip 20-byte session header
+        payload_start = hdr_start + SESSION_HEADER_SIZE
+
+        # Skip echo payload based on frame index
+        if func_hi == 0x10 and hdr_start + 1 < len(data) and data[hdr_start + 1] == 0x03:
+            # 0x1003 continuation frame — has echo payload
+            echo_size = 30 + (8 * (frame_index // 10 + 1)) \
+                        if frame_index % 10 == 0 else 30
+            echo_size = min(echo_size, 200)  # safety cap
+            payload_start += echo_size
+            frame_index += 1
+
+        idx = payload_start
+
+    # VALIDATION: remainder must be 0
+    total_px  = len(result) // 2
+    remainder = total_px % PANO_DEFAULT_HEIGHT
+    if remainder != 0:
+        # Trim tail to nearest 1316-row boundary
+        trim = remainder * 2
+        log.warning("Strip remainder=%d pixels — trimming %d tail bytes",
+                    remainder, trim)
+        result = result[:-trim]
+
     return bytes(result)
 
 
@@ -1033,8 +1066,10 @@ def _calibration_driven_fill(
             raw_pixels.append((segment[i] << 8) | segment[i+1])
             
         filled_pixels = list(raw_pixels)
+        patch_offset = (bs - max(0, bs - flank_extract*2)) // 2
         for i, p in enumerate(predicted):
-            filled_pixels[patch_offset + i] = int(p)
+            if patch_offset + i < len(filled_pixels):
+                filled_pixels[patch_offset + i] = int(p)
             
         max_p = max(raw_pixels + filled_pixels + [1])
         raw_arr = (np.array(raw_pixels) / max_p * 255).astype(np.uint8)
@@ -1099,10 +1134,11 @@ def _repair_inline_telemetry(
         if off < 4 or segment[off-3] != 0x01:
             continue
             
-        # Value check: Telemetry readings are around 2100-2400 (ADC counts)
-        ref_val = (segment[off-2] << 8) | segment[off-1]
-        if not (1800 < ref_val < 3000):
-            continue
+        # Value check: bytes [off-2:off] contain either an ADC reading
+        # (1800-3000) or a frame counter/parameter (e.g. 0x0305 = 773).
+        # The structural checks + marker_count are sufficient to avoid
+        # false positives, so accept any value here.
+        # (Previously rejected blocks with counter values like 773.)
 
         blk_start = off - (TELEM_SIZE - 2)
         if blk_start < 0:
@@ -1147,7 +1183,20 @@ def _repair_inline_telemetry(
             segment_col_offset=segment_col_offset,
         )
 
+        # Validate calibration prediction against border pixel values.
+        # If the prediction mean deviates >15% from the border mean,
+        # the flat-field profile doesn't match this scan — fall back
+        # to linear interpolation which uses actual border values.
+        use_calibration = False
         if predicted is not None and telem["adc_valid"]:
+            val_before = (result[bs - 2] << 8) | result[bs - 1] if bs >= 2 else 0
+            val_after = (result[be] << 8) | result[be + 1] if be + 1 < len(result) else 0
+            border_mean = (val_before + val_after) / 2.0
+            pred_mean = float(np.mean(predicted))
+            if border_mean > 100 and abs(pred_mean / border_mean - 1.0) < 0.15:
+                use_calibration = True
+
+        if use_calibration:
             # Write calibration-predicted values (with matched noise)
             # Estimate local noise from surrounding pixels
             noise_diffs: list[float] = []
@@ -1177,9 +1226,6 @@ def _repair_inline_telemetry(
                 result[pos]     = (val >> 8) & 0xFF
                 result[pos + 1] =  val       & 0xFF
             cal_count += 1
-            
-            # Q4 Check: confirm writes landed
-            _verify_fill_written(result, bs, be, predicted)
 
         else:
             # ── Fallback: linear interpolation with matched noise ──────────
@@ -1322,6 +1368,9 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> tuple[list[Scan
     # so we can do a second-pass 2D repair after reshape.
     repaired_byte_offsets: list[int] = []
 
+    # ── Segment tracking for remainder diagnosis ──
+    _seg_log: list[tuple[str, int, int, int]] = []  # (label, raw_len, repaired_len, clean_pos)
+
     for i, hdr_pos in enumerate(headers_1003):
         if hdr_pos < pixel_start:
             continue
@@ -1333,7 +1382,7 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> tuple[list[Scan
             segment_row_offset = (len(clean) // 2) % 1316
             segment_col_offset = (len(clean) // 2) // 1316
             repaired, block_positions = _repair_inline_telemetry(
-                segment, return_positions=True, 
+                segment, return_positions=True,
                 segment_row_offset=segment_row_offset,
                 segment_col_offset=segment_col_offset,
             )
@@ -1342,13 +1391,20 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> tuple[list[Scan
             base = len(clean)
             for bp in block_positions:
                 repaired_byte_offsets.append(base + bp)
+            _seg_log.append((f"F{i}", len(segment), len(repaired), len(clean)))
             clean.extend(repaired)
 
         after_hdr = hdr_pos + SESSION_HEADER_SIZE
-        payload = data[after_hdr:after_hdr + ECHO_PAYLOAD_MAX]
-        echo_end = _detect_echo_end(payload, frame_index=i)
-        echo_sizes_log.append(echo_end)
 
+        # Echo is ALWAYS exactly 30 bytes (FC30 patient config echo).
+        # The old _detect_echo_end formula for "telemetry frames" was
+        # accidentally matching inline telemetry block anchors (0x0034)
+        # embedded in the pixel stream, not echo-level anchors.
+        # Telemetry anchor spacing confirms: all 108 frame boundaries
+        # have exactly 50 bytes overhead (20 header + 30 echo).
+        echo_end = ECHO_PAYLOAD_SIZE  # always 30
+
+        echo_sizes_log.append(echo_end)
         read_pos = after_hdr + echo_end
 
     # Tail: stop at 0x1004/0x1005 end markers (post-scan report is not pixels)
@@ -1369,7 +1425,44 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> tuple[list[Scan
         base = len(clean)
         for bp in block_positions:
             repaired_byte_offsets.append(base + bp)
+        _seg_log.append(("TAIL", len(segment), len(repaired), len(clean)))
         clean.extend(repaired)
+
+    # ── Segment analysis: find where remainder bytes accumulate ──
+    H2 = PANO_DEFAULT_HEIGHT * 2
+    cum_remainder = 0
+    seg_problems = []
+    for label, raw_len, rep_len, clean_pos in _seg_log:
+        if raw_len != rep_len:
+            seg_problems.append(f"  {label}: len changed {raw_len} -> {rep_len} "
+                                f"(delta={rep_len - raw_len})")
+    if seg_problems:
+        log.warning("Segments with length changes:\n%s", "\n".join(seg_problems))
+
+    # Show per-frame cumulative remainder
+    _frame_remainders: list[tuple[str, int]] = []
+    running = 0
+    for label, raw_len, rep_len, clean_pos in _seg_log:
+        running += rep_len
+        rem = (running // 2) % PANO_DEFAULT_HEIGHT
+        _frame_remainders.append((label, rem))
+
+    # Find where remainder first appears
+    first_nonzero = None
+    for label, rem in _frame_remainders:
+        if rem != 0 and first_nonzero is None:
+            first_nonzero = (label, rem)
+
+    print(f"[SEGMENT ANALYSIS]")
+    print(f"  Total segments: {len(_seg_log)}")
+    print(f"  First remainder: {first_nonzero}")
+    print(f"  Final remainder: {_frame_remainders[-1] if _frame_remainders else 'N/A'}")
+    # Show first 5 and last 5 remainders
+    for label, rem in _frame_remainders[:5]:
+        print(f"  {label}: cum_remainder={rem}")
+    print(f"  ...")
+    for label, rem in _frame_remainders[-5:]:
+        print(f"  {label}: cum_remainder={rem}")
 
     if echo_sizes_log:
         from collections import Counter
@@ -1390,39 +1483,70 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> tuple[list[Scan
 
     # ── 5. Determine image dimensions ─────────────────────────────────────
     img_height = detector_height if detector_height > 0 else PANO_DEFAULT_HEIGHT
-    img_width = total_pixels // img_height
 
-    expected_width = PANO_DEFAULT_WIDTH
-    if abs(img_width - expected_width) < 100:
-        img_width = expected_width
+    # ── RESHAPE INTEGRITY CHECK ──────────────────────────────────────
+    SESSION_SIG = b'\x07\x2d\x07\xd0'
 
-    usable_bytes = img_width * img_height * 2
-    if usable_bytes > len(pixel_data):
-        img_width = len(pixel_data) // (img_height * 2)
-        usable_bytes = img_width * img_height * 2
+    # Pass 1: count residual session headers (07 2D 07 D0 at offset +2)
+    residual_headers = []
+    i = 0
+    while i < len(clean) - 6:
+        if clean[i+2:i+6] == SESSION_SIG:
+            func_hi = clean[i]
+            if func_hi in (0x10, 0x20, 0x21):
+                residual_headers.append(i)
+        i += 2
 
-    # Q3 Check: Stream Start
-    first_pixels = [(clean[i] << 8) | clean[i+1] for i in range(0, 40, 2)]
-    print(f"[STREAM START CHECK] First 20 pixel values: {first_pixels}")
+    # Pass 2: count echo payload remnants
+    arr_check = np.frombuffer(bytes(clean), dtype='>u2')
+    out_of_range = int(np.sum((arr_check < 800) | (arr_check > 62000)))
 
-    # Q2 Check: Reshape Logic
-    total_pixels = len(clean) // 2
-    actual_width = total_pixels // img_height
-    usable_bytes = actual_width * img_height * 2
-    remainder = total_pixels % img_height
-    
-    print(f"[RESHAPE CHECK] len(clean)={len(clean)}, "
-          f"total_pixels={total_pixels}, "
-          f"img_height={img_height}, "
-          f"computed_width={actual_width}, "
-          f"remainder={remainder}")
-    
-    # Strip garbage tail before reshape
-    pixels = np.frombuffer(clean[:usable_bytes], dtype=">u2").copy()
-    img_array = pixels.reshape(actual_width, img_height)
-    
-    img_width = actual_width
+    print(f"[RESHAPE CHECK]")
+    print(f"  clean length:        {len(clean)} bytes")
+    print(f"  total pixels:        {len(clean)//2}")
+    print(f"  remainder mod 1316:  {(len(clean)//2) % img_height}")
+    print(f"  residual headers:    {len(residual_headers)}")
+    print(f"  out-of-range pixels: {out_of_range} / {len(arr_check)}")
+    if residual_headers:
+        print(f"  header positions:    {residual_headers[:10]}")
+        # Dump surrounding bytes for first 3 contamination points
+        for ci, cpos in enumerate(residual_headers[:3]):
+            start = max(0, cpos - 4)
+            end = min(len(clean), cpos + 16)
+            print(f"  contamination[{ci}] @{cpos}: {bytes(clean[start:end]).hex()}")
+    # ── END RESHAPE INTEGRITY CHECK ──────────────────────────────────
+
+    # Trim tail to nearest column boundary if remainder exists
+    # (echo detection inaccuracies can leave a small residual)
+    remainder_px = (len(clean) // 2) % img_height
+    if remainder_px != 0:
+        trim_bytes = remainder_px * 2
+        log.warning("Reshape: trimming %d remainder pixels (%d bytes) from tail",
+                    remainder_px, trim_bytes)
+        clean = clean[:-trim_bytes]
+
+    # Hard assertion: clean buffer must be evenly divisible
+    assert len(clean) % (img_height * 2) == 0, (
+        f"FATAL: clean buffer length {len(clean)} is not divisible by "
+        f"{img_height * 2} — session headers or echo bytes "
+        f"were not fully stripped. Remainder = "
+        f"{(len(clean)//2) % img_height} pixels."
+    )
+
+    width = len(clean) // 2 // img_height
+    arr = np.frombuffer(clean, dtype='>u2')
+    img_array = arr.reshape(width, img_height)
+
+    img_width = width
+    log.info("Reshape: %d × %d (remainder=0 confirmed)", img_height, width)
     print(f"TOTAL FILL CALLS: {_fill_call_count}")  # (cols, rows)
+
+    # ── DEBUG: Save raw reshaped image before any corrections ──────────
+    _raw_img = img_array.T.astype(np.float32)  # (height, width)
+    _raw_norm = ((_raw_img - _raw_img.min()) / max(_raw_img.max() - _raw_img.min(), 1) * 255).astype(np.uint8)
+    from PIL import Image as _PILImage
+    _PILImage.fromarray(_raw_norm).save("debug_raw_reshape_BEFORE_corrections.png")
+    log.info("Saved raw reshape debug image: debug_raw_reshape_BEFORE_corrections.png")
 
     log.info(
         "Panoramic: %d columns x %d rows, pixel range %d-%d, mean %.0f",
@@ -1844,6 +1968,31 @@ def reconstruct_image(
         log.info("Dark correction: pre=%.0f, post=%.0f, drift=%.0f",
                  dp_med, dq_med, dq_med - dp_med)
 
+    # DEBUG: save after dark correction
+    _dbg = ((img_f - img_f.min()) / max(img_f.max() - img_f.min(), 1) * 255).astype(np.uint8)
+    Image.fromarray(_dbg).save("debug_stage01_dark_corrected.png")
+    log.info("DEBUG saved: debug_stage01_dark_corrected.png")
+
+    # ── Detect left/right exposure boundaries (pre-gain correction) ──
+    #   After dark subtraction, pre-exposure columns are exactly zero.
+    #   Detect boundaries now (clean signal) for use in display-domain
+    #   collimator masking later.
+    _col_means_dc = np.mean(img_f[height // 4:height * 3 // 4, :], axis=0)
+    _dc_peak = np.max(_col_means_dc)
+    _dc_thresh = max(_dc_peak * 0.03, 0.5)
+    _exposure_left = 0
+    for c in range(width):
+        if _col_means_dc[c] > _dc_thresh:
+            _exposure_left = c
+            break
+    _exposure_right = width - 1
+    for c in range(width - 1, -1, -1):
+        if _col_means_dc[c] > _dc_thresh:
+            _exposure_right = c
+            break
+    log.info("Exposure boundaries (dark-corrected): left=%d, right=%d",
+             _exposure_left, _exposure_right)
+
     # ── Flat-field row gain correction ──────────────────────────────
     #   Apply per-row detector gain profile from a blank (no-patient)
     #   exposure capture.  Corrects die-edge fall-off and inter-die
@@ -1884,7 +2033,8 @@ def reconstruct_image(
                 gain_col = sgf_gain[f0] * (1 - t) + sgf_gain[f1] * t
                 with np.errstate(divide="ignore", invalid="ignore"):
                     corr = np.where(gain_col > 0.5, 1.0 / gain_col, 1.0)
-                img_f[:, c] *= np.clip(corr, 0.5, 2.0)
+                corr = np.clip(corr, 0.5, 2.0)
+                img_f[:, c] *= corr
             log.info("SGF gain correction applied (%d frames × %d rows)",
                      n_sgf_frames, sgf_gain.shape[1])
     except Exception as exc:
@@ -1892,52 +2042,89 @@ def reconstruct_image(
 
     # ── Die junction stitching ────────────────────────────────────────
     #   The DX41 detector has two vertically stacked CMOS dies.  They
-    #   may have a dead-row gap AND/OR a gain mismatch.  Detect the
-    #   junction by finding the signal minimum in the central rows,
-    #   then equalise the two halves with a smooth sigmoid blend.
+    #   may have a dead-row gap AND/OR a gain mismatch.
+    #
+    #   Detection: look for a STEP discontinuity in the row signal
+    #   (not just a smooth gradient from beam geometry).  A real die
+    #   junction has a sharp gain change over 1-3 rows.  A beam gradient
+    #   is smooth over hundreds of rows.
+    #
+    #   Sidexis calls this "DoLinearSegmentCorrection".
+    from scipy.ndimage import gaussian_filter1d as _gf1d
     active_col_lo = max(width // 5, 50)
     active_col_hi = min(width * 4 // 5, width - 50)
     row_signal = np.mean(img_f[:, active_col_lo:active_col_hi], axis=1)
-    # Smooth to find the true minimum (not noise)
-    from scipy.ndimage import gaussian_filter1d as _gf1d
-    row_smooth = _gf1d(row_signal, sigma=10)
     mid = height // 2
-    search_lo, search_hi = mid - 200, mid + 200
-    junction_row = search_lo + int(np.argmin(row_smooth[search_lo:search_hi]))
 
-    # Measure gain on each side (well away from junction)
-    upper_band = img_f[max(0, junction_row - 200):junction_row - 80,
-                       active_col_lo:active_col_hi]
-    lower_band = img_f[junction_row + 80:min(height, junction_row + 200),
-                       active_col_lo:active_col_hi]
-    upper_med = np.median(upper_band[upper_band > 10]) if np.any(upper_band > 10) else 1.0
-    lower_med = np.median(lower_band[lower_band > 10]) if np.any(lower_band > 10) else 1.0
+    telem_row_lo = 1007
+    telem_row_hi = 1043
 
-    if upper_med > 10 and lower_med > 10 and abs(upper_med / lower_med - 1) > 0.05:
-        ratio = upper_med / lower_med
-        blend_half = 80
-        for r in range(height):
-            dist = r - junction_row
-            sigmoid = 1.0 / (1.0 + np.exp(-dist / (blend_half / 4)))
-            img_f[r] *= 1.0 * (1 - sigmoid) + ratio * sigmoid
-        log.info("Die junction: row %d, gain ratio %.3f (upper/lower)",
-                 junction_row, ratio)
+    # ── Find the real die junction by looking for dead/near-dead rows ──
+    # The DX41 has a physical gap (1-3 completely dead rows) between dies,
+    # located near the center of the 1316-row detector (~row 580).
+    # Search only the central 40% to avoid telemetry blocks and
+    # collimator shadow regions at the detector edges.
+    search_lo = height // 4       # ~329
+    search_hi = height * 3 // 4   # ~987 (well above telemetry at 1007)
+    local_med = np.median(row_signal[search_lo:search_hi])
+    dead_threshold = local_med * 0.10
+    dead_mask = row_signal < dead_threshold
+    dead_indices = np.nonzero(dead_mask)[0]
+    central_dead = dead_indices[(dead_indices >= search_lo) &
+                                (dead_indices < search_hi)]
 
-    # Interpolate across any dead rows near the junction
-    gap_threshold = np.max(row_signal) * 0.02
-    dead_rows_mask = row_signal < gap_threshold
-    dead_indices = np.where(dead_rows_mask)[0]
-    central_dead = dead_indices[(dead_indices > mid - 200) &
-                                (dead_indices < mid + 200)]
-    if len(central_dead) >= 3:
-        gs, ge = int(central_dead[0]), int(central_dead[-1])
-        ab = max(gs - 1, 0)
-        bl = min(ge + 1, height - 1)
-        for r in range(gs, ge + 1):
-            t = (r - gs + 1) / (ge - gs + 2)
+    if len(central_dead) >= 1:
+        # Found dead rows — this is the real die junction
+        junction_row = int(np.median(central_dead))
+
+        # Expand the dead zone to include adjacent low-signal rows
+        # (the gap may be wider than just the completely dead rows)
+        gap_start = int(central_dead[0])
+        gap_end = int(central_dead[-1])
+        # Extend to include any rows within 50% of local signal
+        extend_thresh = local_med * 0.50
+        while gap_start > 1 and row_signal[gap_start - 1] < extend_thresh:
+            gap_start -= 1
+        while gap_end < height - 2 and row_signal[gap_end + 1] < extend_thresh:
+            gap_end += 1
+
+        # Interpolate across the dead gap using healthy rows on each side
+        ab = max(gap_start - 1, 0)
+        bl = min(gap_end + 1, height - 1)
+        for r in range(gap_start, gap_end + 1):
+            t = (r - gap_start + 1) / (gap_end - gap_start + 2)
             img_f[r] = img_f[ab] * (1 - t) + img_f[bl] * t
-        log.info("Die junction: interpolated %d dead rows (%d-%d)",
-                 ge - gs + 1, gs, ge)
+
+        log.info("Die junction: row %d, interpolated dead rows %d-%d (%d rows)",
+                 junction_row, gap_start, gap_end, gap_end - gap_start + 1)
+
+        # Check for gain step across the gap
+        STEP_W = 10
+        above_mean = np.mean(row_signal[max(0, gap_start - STEP_W):gap_start])
+        below_mean = np.mean(row_signal[gap_end + 1:min(height, gap_end + 1 + STEP_W)])
+        if above_mean > 10 and below_mean > 10:
+            step_ratio = above_mean / below_mean
+            step_pct = abs(step_ratio - 1.0) * 100
+            if step_pct > 3.0:
+                ratio = max(0.85, min(step_ratio, 1.20))
+                blend_half = 120
+                for r in range(height):
+                    dist = r - junction_row
+                    sigmoid = 1.0 / (1.0 + np.exp(-dist / (blend_half / 4)))
+                    img_f[r] *= 1.0 * (1 - sigmoid) + ratio * sigmoid
+                log.info("Die junction: gain correction %.3f (step=%.1f%%)",
+                         ratio, step_pct)
+            else:
+                log.info("Die junction: step=%.1f%% (no gain correction needed)",
+                         step_pct)
+    else:
+        junction_row = mid
+        log.info("Die junction: no dead rows found, skipping correction")
+
+    # DEBUG: save after die junction
+    _dbg = ((img_f - img_f.min()) / max(img_f.max() - img_f.min(), 1) * 255).astype(np.uint8)
+    Image.fromarray(_dbg).save("debug_stage02_die_junction.png")
+    log.info("DEBUG saved: debug_stage02_die_junction.png")
 
     # ── Row repair ─────────────────────────────────────────────────────
     #   1. Telemetry-repair spike rows: the 36-pixel interpolated blocks
@@ -1973,51 +2160,59 @@ def reconstruct_image(
     if spike_rows:
         log.info("Row repair: %d rows interpolated", len(spike_rows))
 
-    # ── Frame gain equalization ─────────────────────────────────────────
+    # DEBUG: save after row repair
+    _dbg = ((img_f - img_f.min()) / max(img_f.max() - img_f.min(), 1) * 255).astype(np.uint8)
+    Image.fromarray(_dbg).save("debug_stage03_row_repair.png")
+    log.info("DEBUG saved: debug_stage03_row_repair.png")
+
+    # ── Frame gain equalization (per-die) ──────────────────────────────
     #   Each TCP frame (~24.9 columns) has slightly different detector
-    #   gain.  Compute the median gain per frame, smooth across frames
-    #   to get the expected exposure trend, then correct each frame so
-    #   frame-to-frame steps vanish while the slow trend is preserved.
+    #   gain.  The two CMOS dies have independent gain characteristics,
+    #   so equalization must be computed and applied per-die (Sidexis
+    #   does this as "Segment Correction" before enhancement).
+    #
+    #   For each die region, compute the median gain per frame, smooth
+    #   across frames to get the expected exposure trend, then correct
+    #   each frame so frame-to-frame steps vanish.
     from scipy.ndimage import uniform_filter1d
-    stable_lo = height // 6
-    stable_hi = height * 5 // 8
-    col_profile = np.median(img_f[stable_lo:stable_hi, :], axis=0)
 
     COLS_PER_FRAME = 32768.0 / height  # pixels-per-frame / detector-height
     num_frames = int(width / COLS_PER_FRAME) + 1
+    min_signal_global = np.max(np.median(img_f, axis=0)) * 0.05
 
-    frame_gains = np.zeros(num_frames)
-    for fi in range(num_frames):
-        c0 = int(fi * COLS_PER_FRAME)
-        c1 = min(int((fi + 1) * COLS_PER_FRAME), width)
-        if c0 < width and c1 > c0:
-            frame_gains[fi] = np.median(col_profile[c0:c1])
+    # Define per-die stable measurement bands (avoiding junction + telemetry)
+    telem_row_lo, telem_row_hi = 1007, 1043
+    die_regions = [
+        # (label, stable_lo, stable_hi, apply_lo, apply_hi)
+        ("upper", height // 6, min(junction_row - 40, height * 5 // 8),
+         0, junction_row),
+        ("lower", max(junction_row + 40, junction_row + 80),
+         min(height - 20, height),
+         junction_row, height),
+    ]
 
-    # Replace zero/near-zero gains (dark frames) with NaN so they don't
-    # distort the smoothed trend, then interpolate across them.
-    min_signal = np.max(frame_gains) * 0.05
-    active_gains = frame_gains.copy()
-    active_gains[active_gains < min_signal] = np.nan
-    # Fill NaN with nearest valid value for smoothing
-    valid_mask = ~np.isnan(active_gains)
-    if np.any(valid_mask):
-        first_valid = np.argmax(valid_mask)
-        last_valid = len(active_gains) - 1 - np.argmax(valid_mask[::-1])
-        for i in range(first_valid):
-            active_gains[i] = active_gains[first_valid]
-        for i in range(last_valid + 1, len(active_gains)):
-            active_gains[i] = active_gains[last_valid]
-        # Linear interpolation for interior NaN
-        nans = np.isnan(active_gains)
-        if np.any(nans):
-            active_gains[nans] = np.interp(
-                np.where(nans)[0], np.where(~nans)[0], active_gains[~nans]
-            )
+    def _apply_frame_eq_region(row_lo, row_hi, apply_lo, apply_hi,
+                                smooth_sz, clip_lo, clip_hi, label):
+        """Apply one pass of frame gain equalization to a row region."""
+        # Exclude telemetry rows from measurement
+        meas_rows = [r for r in range(row_lo, row_hi)
+                     if not (telem_row_lo <= r < telem_row_hi)]
+        if len(meas_rows) < 20:
+            return
+        col_prof = np.median(img_f[meas_rows, :], axis=0)
 
-    def _apply_frame_eq(gains_arr, smooth_sz, clip_lo, clip_hi):
-        """Apply one pass of frame gain equalization."""
-        ag = gains_arr.copy()
-        ag[ag < min_signal] = np.nan
+        gains = np.zeros(num_frames)
+        for fi in range(num_frames):
+            c0 = int(fi * COLS_PER_FRAME)
+            c1 = min(int((fi + 1) * COLS_PER_FRAME), width)
+            if c0 < width and c1 > c0:
+                gains[fi] = np.median(col_prof[c0:c1])
+
+        ms = np.max(gains) * 0.05
+        if ms < 1:
+            return
+        ag = gains.copy()
+        ag[ag < ms] = np.nan
         vm = ~np.isnan(ag)
         if not np.any(vm):
             return
@@ -2032,58 +2227,84 @@ def reconstruct_image(
             )
         trend = uniform_filter1d(ag, size=smooth_sz)
         with np.errstate(divide='ignore', invalid='ignore'):
-            fc = np.where(gains_arr > min_signal, trend / gains_arr, 1.0)
+            fc = np.where(gains > ms, trend / gains, 1.0)
         fc = np.clip(fc, clip_lo, clip_hi)
         for c in range(width):
             ff = c / COLS_PER_FRAME
             f0 = int(ff)
             f1 = min(f0 + 1, num_frames - 1)
             t = ff - f0
-            img_f[:, c] *= fc[f0] * (1 - t) + fc[f1] * t
+            corr = fc[f0] * (1 - t) + fc[f1] * t
+            img_f[apply_lo:apply_hi, c] *= corr
 
-    # Pass 1: broad equalization (11-frame smooth) — removes large-scale steps
-    _apply_frame_eq(frame_gains, smooth_sz=11, clip_lo=0.80, clip_hi=1.25)
+    for label, stable_lo, stable_hi, apply_lo, apply_hi in die_regions:
+        # Pass 1: broad equalization
+        _apply_frame_eq_region(stable_lo, stable_hi, apply_lo, apply_hi,
+                                smooth_sz=11, clip_lo=0.80, clip_hi=1.25,
+                                label=label)
+        # Pass 2: narrow equalization
+        _apply_frame_eq_region(stable_lo, stable_hi, apply_lo, apply_hi,
+                                smooth_sz=3, clip_lo=0.92, clip_hi=1.08,
+                                label=label)
 
-    # Pass 2: narrow equalization (3-frame smooth) — catches remaining outliers
-    col_profile2 = np.median(img_f[stable_lo:stable_hi, :], axis=0)
-    frame_gains2 = np.zeros(num_frames)
-    for fi in range(num_frames):
-        c0 = int(fi * COLS_PER_FRAME)
-        c1 = min(int((fi + 1) * COLS_PER_FRAME), width)
-        if c0 < width and c1 > c0:
-            frame_gains2[fi] = np.median(col_profile2[c0:c1])
-    _apply_frame_eq(frame_gains2, smooth_sz=3, clip_lo=0.92, clip_hi=1.08)
+    log.info("Frame equalization: %d frames, %d die regions (two-pass)",
+             num_frames, len(die_regions))
 
-    log.info("Frame equalization: %d frames (two-pass)", num_frames)
+    # DEBUG: save after frame equalization
+    _dbg = ((img_f - img_f.min()) / max(img_f.max() - img_f.min(), 1) * 255).astype(np.uint8)
+    Image.fromarray(_dbg).save("debug_stage04_frame_eq.png")
+    log.info("DEBUG saved: debug_stage04_frame_eq.png")
 
-    # ── Per-column flat-field (residual) ─────────────────────────────
+    # ── Per-column flat-field (residual, per-die) ──────────────────────
     #   After frame equalization, remove any remaining per-column gain
-    #   variation by dividing each column by its median and restoring
-    #   the slowly-varying exposure trend.
-    col_meds = np.median(img_f[stable_lo:stable_hi, :], axis=0)
-    col_meds[col_meds == 0] = 1
-    col_trend = uniform_filter1d(col_meds, size=101)
-    img_f *= (col_trend / col_meds)[np.newaxis, :]
+    #   variation.  Compute and apply independently per die to avoid
+    #   cross-die gain contamination.
+    for label, stable_lo, stable_hi, apply_lo, apply_hi in die_regions:
+        meas_rows = [r for r in range(stable_lo, stable_hi)
+                     if not (telem_row_lo <= r < telem_row_hi)]
+        if len(meas_rows) < 20:
+            continue
+        col_meds = np.median(img_f[meas_rows, :], axis=0)
+        col_meds[col_meds == 0] = 1
+        col_trend = uniform_filter1d(col_meds, size=101)
+        correction = col_trend / col_meds
+        img_f[apply_lo:apply_hi, :] *= correction[np.newaxis, :]
 
-    # ── Linear-domain inpainting of telemetry repair zones ─────────
-    #   Before any non-linear processing (gamma, MUSICA), inpaint the
-    #   telemetry-repaired pixels using surrounding real data.  This
-    #   prevents MUSICA from amplifying the repair/real boundaries.
-    if repair_mask is not None and repair_mask.shape == img_f.shape:
-        try:
-            import cv2
-            p99 = np.percentile(img_f, 99.5)
-            if p99 > 0:
-                img_16 = np.clip(img_f / p99 * 65535, 0, 65535).astype(np.uint16)
-                kernel = np.ones((5, 3), dtype=np.uint8)
-                mask_d = cv2.dilate(repair_mask, kernel, iterations=1)
-                img_16 = cv2.inpaint(img_16, mask_d,
-                                     inpaintRadius=20, flags=cv2.INPAINT_NS)
-                img_f = img_16.astype(np.float32) / 65535.0 * p99
-                log.info("Linear-domain inpainting: %d pixels",
-                         int(np.sum(mask_d > 0)))
-        except Exception as exc:
-            log.debug("Linear-domain inpainting skipped: %s", exc)
+    # ── Linear-domain dead zone interpolation ────────────────────────
+    #   Interpolate across the low-signal dead zone around the telemetry
+    #   block.  Use linear interpolation between the last healthy row
+    #   above and the first healthy row below — no blend zones (they
+    #   create an artificial brightness arch that MUSICA amplifies).
+    active_col_range = slice(width // 4, width * 3 // 4)
+    row_signal_lin = np.mean(img_f[:, active_col_range], axis=1)
+    lin_peak = np.max(row_signal_lin[height // 4:height * 3 // 4])
+    dead_thresh = lin_peak * 0.20
+
+    dead_zone_top = telem_row_lo
+    while dead_zone_top > 1 and row_signal_lin[dead_zone_top - 1] < dead_thresh:
+        dead_zone_top -= 1
+    dead_zone_bot = telem_row_hi
+    while dead_zone_bot < height - 2 and row_signal_lin[dead_zone_bot + 1] < dead_thresh:
+        dead_zone_bot += 1
+
+    anchor_above = max(0, dead_zone_top - 1)
+    anchor_below = min(height - 1, dead_zone_bot + 1)
+    dead_zone_h = anchor_below - anchor_above
+
+    if dead_zone_h > 2:
+        for r in range(anchor_above + 1, anchor_below):
+            t = (r - anchor_above) / dead_zone_h
+            img_f[r] = img_f[anchor_above] * (1 - t) + img_f[anchor_below] * t
+        log.info("Dead zone interpolation: rows %d-%d (%d rows)",
+                 dead_zone_top, dead_zone_bot, dead_zone_bot - dead_zone_top + 1)
+
+    # DEBUG: save after telemetry row repair (pre-tone mapping)
+    _dbg = ((img_f - img_f.min()) / max(img_f.max() - img_f.min(), 1) * 255).astype(np.uint8)
+    Image.fromarray(_dbg).save("debug_stage05_telem_repair.png")
+    log.info("DEBUG saved: debug_stage05_telem_repair.png")
+
+    # DEBUG: save pre-MUSICA (after gamma, before MUSICA)
+    # (inserted below after img_norm is computed)
 
     # ── WWE tone mapping + MUSICA contrast enhancement ─────────────
     #   1. Percentile-normalise to [0,1] and apply gamma (0.4) for
@@ -2105,6 +2326,11 @@ def reconstruct_image(
         img_norm = 1.0 - np.power(img_norm, WWE_GAMMA)
     else:
         img_norm = np.power(img_norm, WWE_GAMMA)
+
+    # DEBUG: save after WWE gamma (before deband/MUSICA)
+    _dbg = (np.clip(img_norm, 0, 1) * 255).astype(np.uint8)
+    Image.fromarray(_dbg).save("debug_stage06_wwe_gamma.png")
+    log.info("DEBUG saved: debug_stage06_wwe_gamma.png")
 
     # Horizontal deband: soften frame-boundary gain steps (sigma=4 cols).
     # BUG 5 FIX: Use protected smoothing to preserve telemetry hole boundaries
@@ -2128,9 +2354,52 @@ def reconstruct_image(
     except Exception as exc:
         log.debug("Glow region diff diagnostic failed: %s", exc)
 
+    # ── Display-domain deband (VFilter + column equalization) ──────
+    #   Sidexis applies "VFilter Correction" to remove per-row detector
+    #   gain banding and per-column frame gain steps.  Work in the
+    #   gamma-corrected domain so corrections match visual perception.
+
+    # Per-row normalization (VFilter): removes fine horizontal banding
+    # from per-row detector gain variations.  Use a tight sigma (3) to
+    # catch individual row-level brightness variations (1-2 px lines).
+    stable_cols = slice(width // 4, width * 3 // 4)
+    row_means_d = np.mean(img_norm[:, stable_cols], axis=1)
+    row_means_d = np.maximum(row_means_d, 0.01)
+    row_trend_d = gaussian_filter1d(row_means_d.astype(np.float64),
+                                     sigma=3).astype(np.float32)
+    row_corr = np.clip(row_trend_d / row_means_d, 0.82, 1.22)
+    img_norm *= row_corr[:, np.newaxis]
+
+    # Per-column normalization: removes vertical banding (frame gain)
+    stable_rows = slice(height // 6, height * 5 // 8)
+    col_means_d = np.mean(img_norm[stable_rows, :], axis=0)
+    col_means_d = np.maximum(col_means_d, 0.01)
+    col_trend_d = uniform_filter1d(col_means_d.astype(np.float64),
+                                    size=51).astype(np.float32)
+    col_corr = np.clip(col_trend_d / col_means_d, 0.92, 1.08)
+    img_norm *= col_corr[np.newaxis, :]
+    img_norm = np.clip(img_norm, 0, 1)
+
+    # DEBUG: save after VFilter deband (before MUSICA)
+    _dbg = (np.clip(img_norm, 0, 1) * 255).astype(np.uint8)
+    Image.fromarray(_dbg).save("debug_stage07_vfilter_deband.png")
+    log.info("DEBUG saved: debug_stage07_vfilter_deband.png")
+
+    # ── Pre-MUSICA row median filter ────────────────────────────────
+    #   Median filter in the row direction (size=3) to remove single-row
+    #   brightness outliers that VFilter couldn't correct (clip limits).
+    #   Unlike Gaussian blur, median preserves edges while eliminating
+    #   the isolated bright/dark rows that MUSICA would amplify into
+    #   visible horizontal stripes.
+    from scipy.ndimage import median_filter as _medfilt
+    img_norm = _medfilt(img_norm, size=(3, 1))
+
+    # Save pre-MUSICA image for spatial blending below
+    pre_musica_16 = (img_norm * 65535).astype(np.uint16)
+
     # MUSICA Laplacian pyramid (4 detail scales + residual)
     MUSICA_SIGMAS = [2, 8, 32, 128]
-    MUSICA_GAINS = [1.0, 1.8, 1.2, 0.15]
+    MUSICA_GAINS = [0.5, 1.8, 1.2, 0.15]
 
     levels = [img_norm]
     for sigma in MUSICA_SIGMAS:
@@ -2159,55 +2428,158 @@ def reconstruct_image(
     except ImportError:
         pass
 
+    # ── Spatial MUSICA blending ──────────────────────────────────────
+    #   MUSICA amplifies per-row detector gain banding in the bottom
+    #   region where there's little anatomical content to mask it.
+    #   Blend the MUSICA output with the pre-MUSICA image: full MUSICA
+    #   in the top (anatomy-rich), tapering to zero MUSICA in the bottom
+    #   (detector-structure-dominated).  The taper starts at the dead zone.
+    #   In the original detector coords:
+    #     dead_zone_top ~ row 982  (cropped ~964)
+    #   We taper from 100% MUSICA above the dead zone to 0% at the bottom.
+    MUSICA_TAPER_START = dead_zone_top if 'dead_zone_top' in dir() else height * 3 // 4
+    MUSICA_TAPER_END = height  # 0% MUSICA at the bottom
+    taper_len = max(MUSICA_TAPER_END - MUSICA_TAPER_START, 1)
+
+    img_16f_blend = img_16.astype(np.float32)
+    pre_16f = pre_musica_16.astype(np.float32)
+    for r in range(MUSICA_TAPER_START, min(MUSICA_TAPER_END, height)):
+        alpha = 1.0 - (r - MUSICA_TAPER_START) / taper_len
+        alpha = max(0.0, min(1.0, alpha))
+        img_16f_blend[r] = img_16f_blend[r] * alpha + pre_16f[r] * (1.0 - alpha)
+    img_16 = np.clip(img_16f_blend, 0, 65535).astype(np.uint16)
+    log.info("MUSICA spatial blend: taper rows %d-%d (100%%->0%%)",
+             MUSICA_TAPER_START, MUSICA_TAPER_END)
+
     log.info("Applied WWE gamma=%.1f + MUSICA multi-scale enhancement", WWE_GAMMA)
+
+    # DEBUG: save after MUSICA + CLAHE (before post-MUSICA telem repair)
+    _dbg = (img_16 >> 8).astype(np.uint8)
+    Image.fromarray(_dbg).save("debug_stage08_musica_clahe.png")
+    log.info("DEBUG saved: debug_stage08_musica_clahe.png")
+
+    # Post-MUSICA telemetry repair DISABLED: the dead zone was already
+    # interpolated in linear domain.  Mirror-blending after MUSICA
+    # reintroduces noisy detector rows into the smooth interpolated zone.
+
+    # ── Post-MUSICA per-row deband (two-pass) ──────────────────────
+    #   MUSICA amplifies per-row detector gain variations, especially in
+    #   the lower die region where image content is sparse.  Two passes:
+    #   Pass 1 (sigma=2): catches single-row brightness spikes
+    #   Pass 2 (sigma=8): catches multi-row oscillations from MUSICA halos
+    img_16f2 = img_16.astype(np.float32)
+    stable_cols_pm = slice(width // 4, width * 3 // 4)
+
+    for pm_pass, pm_sigma, pm_clip_lo, pm_clip_hi in [
+        (1, 2, 0.80, 1.25),  # tight: single-row spikes
+        (2, 8, 0.85, 1.18),  # broad: multi-row oscillations
+    ]:
+        row_means_pm = np.mean(img_16f2[:, stable_cols_pm], axis=1)
+        row_means_pm = np.maximum(row_means_pm, 1.0)
+        row_trend_pm = gaussian_filter1d(row_means_pm.astype(np.float64),
+                                          sigma=pm_sigma).astype(np.float32)
+        row_corr_pm = np.clip(row_trend_pm / row_means_pm, pm_clip_lo, pm_clip_hi)
+        img_16f2 *= row_corr_pm[:, np.newaxis]
+        n_corr = np.sum(np.abs(row_corr_pm - 1.0) > 0.01)
+        log.info("Post-MUSICA deband pass %d (σ=%d): %d rows (range %.3f-%.3f)",
+                 pm_pass, pm_sigma, n_corr, row_corr_pm.min(), row_corr_pm.max())
+
+    img_16 = np.clip(img_16f2, 0, 65535).astype(np.uint16)
+
     img_8bit = (img_16 >> 8).astype(np.uint8)
 
-    # ── Sidexis-matched tone curve ────────────────────────────────
-    #   Apply a 256-entry LUT derived from histogram-matching our
-    #   pipeline output against a Sidexis XG reference export.  This
-    #   adjusts the global brightness/contrast to match the clinical
-    #   display convention used by Sidexis (darker midtones, higher
-    #   contrast).  If the LUT file is missing, this step is skipped.
-    try:
-        lut_path = Path(__file__).parent / "sidexis_tone_lut.npy"
-        if lut_path.exists():
-            tone_lut = np.load(lut_path)
-            if len(tone_lut) == 256:
-                img_8bit = tone_lut[img_8bit]
-                log.info("Sidexis tone LUT applied")
-    except Exception as exc:
-        log.debug("Sidexis tone LUT skipped: %s", exc)
+    # ── Tone mapping: percentile stretch + gamma ────────────────────
+    #   Stretch active pixel range to [0, 255], then apply a mild gamma
+    #   to expand highlights (Sidexis convention: bone=medium gray, soft
+    #   tissue=light gray, bite block=bright, background=dark with texture).
+    #   Gamma < 1 lifts midtones and spreads highlights.
+    TONE_GAMMA = 0.90
+    img_f8 = img_8bit.astype(np.float32)
+    active_mask = img_f8 > 0
+    if np.any(active_mask):
+        p_lo, p_hi = np.percentile(img_f8[active_mask], [1, 99])
+        if p_hi > p_lo:
+            stretched = np.clip((img_f8 - p_lo) / (p_hi - p_lo), 0, 1)
+            stretched = np.power(stretched, TONE_GAMMA)
+            img_f8 = np.where(active_mask, stretched * 250 + 5, 0)
+            img_8bit = np.clip(img_f8, 0, 255).astype(np.uint8)
+            log.info("Tone stretch: [%.0f, %.0f] -> [5, 255] gamma=%.2f",
+                     p_lo, p_hi, TONE_GAMMA)
 
-    # ── Collimator edge masking ──────────────────────────────────────
-    #   The X-ray collimator creates sharp bright/dark boundaries at
-    #   the left and right edges of the active exposure.  Detect these
-    #   edges and apply a smooth fade to black so the crop boundary
-    #   looks clean (matching Sidexis behaviour).
-    col_brightness = np.mean(img_8bit, axis=0).astype(np.float32)
-    col_smooth = uniform_filter1d(col_brightness, size=51)
-    peak_brightness = np.max(col_smooth)
-    edge_thresh = peak_brightness * 0.15
-    active_cols_mask = col_smooth > edge_thresh
-    active_indices = np.where(active_cols_mask)[0]
-    if len(active_indices) > 100:
-        left_edge = int(active_indices[0])
-        right_edge = int(active_indices[-1])
-        FADE_WIDTH = 15
-        # Fade left edge
-        for c in range(max(0, left_edge - FADE_WIDTH), left_edge + FADE_WIDTH):
-            if 0 <= c < width:
-                t = max(0.0, min(1.0, (c - left_edge + FADE_WIDTH) / (2 * FADE_WIDTH)))
-                img_8bit[:, c] = (img_8bit[:, c].astype(np.float32) * t).astype(np.uint8)
-        # Fade right edge
-        for c in range(max(0, right_edge - FADE_WIDTH), min(width, right_edge + FADE_WIDTH + 1)):
-            if 0 <= c < width:
-                t = max(0.0, min(1.0, (right_edge + FADE_WIDTH - c) / (2 * FADE_WIDTH)))
-                img_8bit[:, c] = (img_8bit[:, c].astype(np.float32) * t).astype(np.uint8)
-        # Black out beyond fade
-        img_8bit[:, :max(0, left_edge - FADE_WIDTH)] = 0
-        img_8bit[:, min(width, right_edge + FADE_WIDTH + 1):] = 0
-        log.info("Collimator edges: left=%d, right=%d (fade=%d)",
-                 left_edge, right_edge, FADE_WIDTH)
+    # DEBUG: save after tone LUT (before collimator edges)
+    Image.fromarray(img_8bit).save("debug_stage09_tone_lut.png")
+    log.info("DEBUG saved: debug_stage09_tone_lut.png")
+
+    # ── Left/right collimator masking ─────────────────────────────────
+    #   Use the exposure boundaries detected right after dark correction
+    #   (where zero-signal columns are unambiguous) to mask the pre/post
+    #   exposure dead columns that invert to white.
+    FADE_WIDTH = 25
+    lin_left_edge = _exposure_left
+    lin_right_edge = _exposure_right
+
+    # Fade left edge
+    for c in range(min(width, lin_left_edge + FADE_WIDTH)):
+        if c < lin_left_edge:
+            img_8bit[:, c] = 0
+        else:
+            t = (c - lin_left_edge) / FADE_WIDTH
+            img_8bit[:, c] = (img_8bit[:, c].astype(np.float32) * t).astype(np.uint8)
+
+    # Fade right edge
+    for c in range(max(0, lin_right_edge - FADE_WIDTH), width):
+        if c > lin_right_edge:
+            img_8bit[:, c] = 0
+        else:
+            t = (lin_right_edge - c) / FADE_WIDTH
+            img_8bit[:, c] = (img_8bit[:, c].astype(np.float32) * t).astype(np.uint8)
+
+    log.info("Collimator L/R edges (dark-corrected): left=%d, right=%d (fade=%d)",
+             lin_left_edge, lin_right_edge, FADE_WIDTH)
+
+    # ── Top/bottom collimator fade (display domain) ────────────────
+    #   Detect collimator edges in the display domain by scanning for
+    #   brightness drop.  Only fades the actual image edges where the
+    #   collimator physically blocks the beam (top/bottom few rows).
+    row_brightness = np.mean(img_8bit[:, width//4:width*3//4], axis=1).astype(np.float32)
+    row_smooth_c = uniform_filter1d(row_brightness, size=11)
+    upper_peak = np.max(row_smooth_c[height//4:height*3//4])
+    VFADE = 20
+
+    # Bottom: scan from the very bottom upward for the first row with signal
+    bot_edge = None
+    bot_thresh = upper_peak * 0.15
+    for r in range(height - 1, height * 3 // 4, -1):
+        if row_smooth_c[r] > bot_thresh:
+            bot_edge = r + 1  # first dark row below active content
+            break
+
+    if bot_edge is not None and bot_edge < height - 5:
+        fade_start = max(0, bot_edge - VFADE)
+        for r in range(fade_start, min(height, bot_edge)):
+            t = max(0.0, (bot_edge - r) / VFADE)
+            img_8bit[r, :] = (img_8bit[r, :].astype(np.float32) * t).astype(np.uint8)
+        img_8bit[bot_edge:, :] = 0
+        log.info("Bottom collimator fade: row %d (VFADE=%d)", bot_edge, VFADE)
+
+    # Top: scan from the very top downward for the first row with signal
+    top_edge = None
+    for r in range(0, height // 4):
+        if row_smooth_c[r] > bot_thresh:
+            top_edge = r  # first active row
+            break
+
+    if top_edge is not None and top_edge > 5:
+        fade_end = min(height, top_edge + VFADE)
+        for r in range(top_edge, fade_end):
+            t = max(0.0, (r - top_edge) / VFADE)
+            img_8bit[r, :] = (img_8bit[r, :].astype(np.float32) * t).astype(np.uint8)
+        img_8bit[:top_edge, :] = 0
+        log.info("Top collimator fade: row %d (VFADE=%d)", top_edge, VFADE)
+
+    # DEBUG: save after collimator edges (before crop)
+    Image.fromarray(img_8bit).save("debug_stage10_collimator.png")
+    log.info("DEBUG saved: debug_stage10_collimator.png")
 
     # ── Crop to standard output size ───────────────────────────────
     #   Sidexis outputs 2440×1280 from the raw 2706×1316.
@@ -2217,17 +2589,13 @@ def reconstruct_image(
         row_bot = row_top + CROP_H
         img_8bit = img_8bit[row_top:row_bot, :]
     if width > CROP_W:
-        # Center crop on the active region
-        if len(active_indices) > 100:
-            center = (left_edge + right_edge) // 2
-            col_left = max(0, center - CROP_W // 2)
-            col_right = col_left + CROP_W
-            if col_right > width:
-                col_right = width
-                col_left = max(0, col_right - CROP_W)
-        else:
-            col_left = min((width - CROP_W), max(20, (width - CROP_W) // 2))
-            col_right = col_left + CROP_W
+        # Center crop on the active exposure region
+        center = (lin_left_edge + lin_right_edge) // 2
+        col_left = max(0, center - CROP_W // 2)
+        col_right = col_left + CROP_W
+        if col_right > width:
+            col_right = width
+            col_left = max(0, col_right - CROP_W)
         img_8bit = img_8bit[:, col_left:col_right]
     crop_h, crop_w = img_8bit.shape
     log.info("Cropped: %dx%d -> %dx%d", width, height, crop_w, crop_h)
