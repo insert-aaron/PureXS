@@ -1076,8 +1076,12 @@ def _calibration_driven_fill(
         fill_arr = (np.array(filled_pixels) / max_p * 255).astype(np.uint8)
         
         img_arr = np.column_stack([np.tile(raw_arr, (50, 1)).T, np.zeros((len(raw_arr), 10), dtype=np.uint8), np.tile(fill_arr, (50, 1)).T])
-        Image.fromarray(img_arr).save(f"/tmp/debug_hole_{_debug_holes_count+1}.png")
-        log.info(f"Saved /tmp/debug_hole_{_debug_holes_count+1}.png")
+        try:
+            _dbg_path = LOG_DIR / f"debug_hole_{_debug_holes_count+1}.png"
+            Image.fromarray(img_arr).save(str(_dbg_path))
+            log.info("Saved %s", _dbg_path)
+        except Exception:
+            pass
         
         _debug_holes_count += 1
 
@@ -1880,7 +1884,7 @@ def _protected_row_smooth(img_array: np.ndarray,
 def _save_glow_region_diff(raw_img: np.ndarray,
                             repaired_img: np.ndarray,
                             hole_columns: list[int],
-                            output_path: str = "/tmp/bug2_glow_diff.png",
+                            output_path: str = "",
                             row_context: int = 100,
                             col_context: int = 60) -> None:
     """
@@ -1959,8 +1963,13 @@ def _save_glow_region_diff(raw_img: np.ndarray,
     img_out = Image.fromarray(final)
     draw = ImageDraw.Draw(img_out)
     draw.text((5, 5), "RAW | REPAIRED | DIFF (x3)", fill=255)
-    img_out.save(output_path)
-    log.info(f"Saved glow region diff: {output_path}")
+    if not output_path:
+        output_path = str(LOG_DIR / "bug2_glow_diff.png")
+    try:
+        img_out.save(output_path)
+        log.info("Saved glow region diff: %s", output_path)
+    except Exception:
+        pass
 
 
 def _extract_events(data: bytes) -> list[ScanEvent]:
@@ -2285,7 +2294,8 @@ def reconstruct_image(
         below = r + 1
         while below in spike_rows and below < height - 1:
             below += 1
-        if above not in spike_rows and below not in spike_rows:
+        if (above >= 0 and below < height
+                and above not in spike_rows and below not in spike_rows):
             t = (r - above) / max(below - above, 1)
             img_f[r] = img_f[above] * (1 - t) + img_f[below] * t
     if spike_rows:
