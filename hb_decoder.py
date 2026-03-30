@@ -1303,6 +1303,138 @@ def _find_pixel_start(data: bytes, search_start: int = 60000,
     return best_off
 
 
+def _extract_panoramic_simple(data: bytes, detector_height: int = 0) -> list[Scanline]:
+    """Simple panoramic extraction — strip headers, find pixel start, reshape.
+
+    This is the original proven extraction that worked reliably with live
+    device captures.  No inline telemetry repair, no correlation-based
+    pixel start detection, no asserts.  Used as a fallback when the
+    advanced _extract_panoramic fails.
+    """
+    if len(data) < 10000:
+        return []
+
+    # 1. Build list of all session headers
+    headers: list[tuple[int, int]] = []
+    idx = 0
+    while idx < len(data) - 6:
+        pos = data.find(_SESSION_SIG, idx)
+        if pos < 0:
+            break
+        hdr_start = pos - 2
+        if hdr_start < idx:
+            idx = pos + 4
+            continue
+        func_hi = data[hdr_start] if hdr_start >= 0 else 0
+        if func_hi in (0x10, 0x20, 0x21):
+            func_code = (data[hdr_start] << 8) | data[hdr_start + 1]
+            headers.append((hdr_start, func_code))
+        idx = pos + 4
+
+    if not headers:
+        log.warning("Simple panoramic: no session headers found in %d bytes", len(data))
+        return []
+
+    # 2. Strip headers + echo payloads -> clean byte stream
+    clean = bytearray()
+    read_pos = 0
+    first_1003 = True
+
+    for hdr_pos, func_code in headers:
+        if hdr_pos > read_pos:
+            clean.extend(data[read_pos:hdr_pos])
+        after_hdr = hdr_pos + SESSION_HEADER_SIZE
+        if func_code == 0x1003:
+            skip = ECHO_PAYLOAD_SIZE
+            if first_1003:
+                skip += FIRST_FRAME_PADDING
+                first_1003 = False
+            read_pos = after_hdr + skip
+        else:
+            read_pos = after_hdr
+
+    if read_pos < len(data):
+        clean.extend(data[read_pos:])
+
+    log.info("Simple panoramic: %d raw -> %d clean bytes", len(data), len(clean))
+
+    # 3. Find pixel start via transition marker
+    marker_pos = clean.find(PIXEL_TRANSITION_MARKER)
+    if marker_pos < 0:
+        log.warning("Simple panoramic: transition marker D6 D6 4C not found")
+        return []
+
+    pixel_start = marker_pos + 12
+    if pixel_start % 2 != 0:
+        pixel_start += 1
+
+    pixel_data = bytes(clean[pixel_start:])
+    total_pixels = len(pixel_data) // 2
+    if total_pixels < 100000:
+        log.warning("Simple panoramic: too few pixels (%d)", total_pixels)
+        return []
+
+    # 4. Reshape
+    img_height = detector_height if detector_height > 0 else PANO_DEFAULT_HEIGHT
+    img_width = total_pixels // img_height
+    expected_width = PANO_DEFAULT_WIDTH
+    if abs(img_width - expected_width) < 100:
+        img_width = expected_width
+
+    usable_bytes = img_width * img_height * 2
+    if usable_bytes > len(pixel_data):
+        img_width = len(pixel_data) // (img_height * 2)
+        usable_bytes = img_width * img_height * 2
+
+    pixels = np.frombuffer(pixel_data[:usable_bytes], dtype=">u2")
+    img_array = pixels.reshape(img_width, img_height)
+
+    log.info("Simple panoramic: %d x %d, range %d-%d",
+             img_width, img_height, img_array.min(), img_array.max())
+
+    # 5. Repair artifact rows (simple threshold-based)
+    img_2d = img_array.T.astype(np.float32)
+    row_means = np.mean(img_2d, axis=1)
+    row_diffs = np.abs(np.diff(row_means))
+    diff_median = np.median(row_diffs)
+    diff_std = np.std(row_diffs)
+    threshold = diff_median + 6 * diff_std
+
+    repaired_rows = []
+    for r in range(1, img_height - 1):
+        if r < len(row_diffs) and row_diffs[r] > threshold:
+            repaired_rows.append(r)
+            if r + 1 < img_height - 1:
+                repaired_rows.append(r + 1)
+    repaired_rows = sorted(set(repaired_rows))
+
+    if repaired_rows:
+        repaired_set = set(repaired_rows)
+        for r in repaired_rows:
+            above = r - 1
+            while above in repaired_set and above > 0:
+                above -= 1
+            below = r + 1
+            while below in repaired_set and below < img_height - 1:
+                below += 1
+            if above >= 0 and below < img_height:
+                t = (r - above) / max(below - above, 1)
+                img_2d[r] = img_2d[above] * (1 - t) + img_2d[below] * t
+        img_array = img_2d.T.astype(np.uint16)
+        log.info("Simple panoramic: repaired %d artifact rows", len(repaired_rows))
+
+    # 6. Build Scanline objects
+    scanlines = []
+    for col_idx in range(img_width):
+        scanlines.append(Scanline(
+            scanline_id=col_idx & 0xFF,
+            pixel_count=img_height,
+            pixels=img_array[col_idx] if img_array.dtype == np.uint16
+            else img_array[col_idx].astype(np.uint16),
+        ))
+    return scanlines
+
+
 def _extract_panoramic(data: bytes, detector_height: int = 0) -> tuple[list[Scanline], np.ndarray | None] | list[Scanline]:
     """Extract a full panoramic image from the raw scan data stream.
 
@@ -3012,6 +3144,7 @@ class SironaLiveClient:
         self._scan_kv_peak = kv_peak / 10.0
 
         # Extract full panoramic image from continuous pixel stream
+        # Try advanced panoramic extraction (with telemetry repair etc.)
         try:
             _pano_result = _extract_panoramic(raw)
             if isinstance(_pano_result, tuple):
@@ -3019,11 +3152,23 @@ class SironaLiveClient:
             else:
                 scanlines, self._repair_mask = _pano_result, None
         except Exception as exc:
-            log.error("Panoramic extraction failed: %s — falling back to marker scanlines", exc)
+            log.error("Advanced panoramic extraction failed: %s", exc)
             scanlines = []
             self._repair_mask = None
+
+        # Fallback 1: simple panoramic extraction (no telemetry repair)
         if not scanlines:
-            # Fallback to marker-based extraction
+            try:
+                scanlines = _extract_panoramic_simple(raw)
+                self._repair_mask = None
+                if scanlines:
+                    log.info("Simple panoramic: %d columns", len(scanlines))
+            except Exception as exc:
+                log.error("Simple panoramic extraction failed: %s", exc)
+                scanlines = []
+
+        # Fallback 2: marker-based extraction (minimal, always works)
+        if not scanlines:
             scanlines = _extract_scanlines(raw)
             if scanlines:
                 log.info(
