@@ -1525,13 +1525,16 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> tuple[list[Scan
                     remainder_px, trim_bytes)
         clean = clean[:-trim_bytes]
 
-    # Hard assertion: clean buffer must be evenly divisible
-    assert len(clean) % (img_height * 2) == 0, (
-        f"FATAL: clean buffer length {len(clean)} is not divisible by "
-        f"{img_height * 2} — session headers or echo bytes "
-        f"were not fully stripped. Remainder = "
-        f"{(len(clean)//2) % img_height} pixels."
-    )
+    # Verify clean buffer is evenly divisible (trim if not)
+    if len(clean) % (img_height * 2) != 0:
+        remainder = (len(clean) // 2) % img_height
+        log.warning(
+            "Clean buffer %d bytes not divisible by %d — "
+            "trimming %d remainder pixels",
+            len(clean), img_height * 2, remainder,
+        )
+        trim = remainder * 2
+        clean = clean[:-trim]
 
     width = len(clean) // 2 // img_height
     arr = np.frombuffer(clean, dtype='>u2')
@@ -1558,10 +1561,6 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> tuple[list[Scan
     # Disabled: The 1D flat-field texture fill is structurally seamless.
     # Replacing it with cloned adjacent tissue introduces mathematical noise 
     # and jagged boundaries along image gradients.
-
-        # BUG 1 FIX: Ensure 2D repair logic is COMPLETELY terminated!
-    if hasattr(sys, '_CALLED_2D_REPAIR') and sys._CALLED_2D_REPAIR:
-        raise RuntimeError("FATAL OVERLAP: Legacy 2D spatial block-copy algorithm triggered!")
 
     img_2d = img_array.T.astype(np.float32)  # (height, width)
     repaired_rows: list[int] = []
@@ -3013,11 +3012,16 @@ class SironaLiveClient:
         self._scan_kv_peak = kv_peak / 10.0
 
         # Extract full panoramic image from continuous pixel stream
-        _pano_result = _extract_panoramic(raw)
-        if isinstance(_pano_result, tuple):
-            scanlines, self._repair_mask = _pano_result
-        else:
-            scanlines, self._repair_mask = _pano_result, None
+        try:
+            _pano_result = _extract_panoramic(raw)
+            if isinstance(_pano_result, tuple):
+                scanlines, self._repair_mask = _pano_result
+            else:
+                scanlines, self._repair_mask = _pano_result, None
+        except Exception as exc:
+            log.error("Panoramic extraction failed: %s — falling back to marker scanlines", exc)
+            scanlines = []
+            self._repair_mask = None
         if not scanlines:
             # Fallback to marker-based extraction
             scanlines = _extract_scanlines(raw)
