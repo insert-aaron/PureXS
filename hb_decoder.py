@@ -2768,6 +2768,41 @@ def reconstruct_image(
     Image.fromarray(img_8bit).save("debug_stage09_tone_lut.png")
     log.info("DEBUG saved: debug_stage09_tone_lut.png")
 
+    # ── Post-MUSICA column correction (display domain) ────────────────
+    #   The linear-domain column correction (stage 1, sigma=200) removes
+    #   slow beam-shape variation.  But the gamma inversion + MUSICA
+    #   pyramid re-introduces column banding in the display domain.
+    #   This stage 2 catches the residual frame-group banding (period
+    #   ~30-80 cols) that MUSICA amplified.
+    _img_f_cc2 = img_8bit.astype(np.float32)
+    _cc2_meas_rows = slice(80, min(height - 80, 1200))
+    _cc2_left = _linear_content_left if '_linear_content_left' in dir() else 100
+    _cc2_right = _linear_content_right if '_linear_content_right' in dir() else width - 100
+
+    _cc2_col_means = np.mean(_img_f_cc2[_cc2_meas_rows, :], axis=0).astype(np.float64)
+    _cc2_active = _cc2_col_means[_cc2_left:_cc2_right]
+
+    CC2_SIGMA = 40  # catches ~30-80 col frame-group banding
+    _cc2_smooth = _gf1d(_cc2_active, sigma=CC2_SIGMA).astype(np.float32)
+    _cc2_safe = np.where(_cc2_smooth > 1.0, _cc2_smooth, 1.0)
+    _cc2_ratio = (_cc2_active / _cc2_safe).astype(np.float32)
+    _cc2_corr = np.clip(1.0 / np.where(np.abs(_cc2_ratio) > 0.01, _cc2_ratio, 1.0),
+                        0.85, 1.15)
+    _cc2_std = float(np.std(_cc2_corr))
+
+    if _cc2_std > 0.005:  # meaningful banding to correct
+        _cc2_full = np.ones(width, dtype=np.float32)
+        _cc2_full[_cc2_left:_cc2_right] = _cc2_corr
+        _img_f_cc2 *= _cc2_full[np.newaxis, :]
+        img_8bit = np.clip(_img_f_cc2, 0, 255).astype(np.uint8)
+        log.info("Post-MUSICA column correction (stage 2): sigma=%d  "
+                 "active=[%d,%d]  correction_std=%.4f  range=[%.4f, %.4f]",
+                 CC2_SIGMA, _cc2_left, _cc2_right, _cc2_std,
+                 float(_cc2_corr.min()), float(_cc2_corr.max()))
+    else:
+        log.info("Post-MUSICA column correction SKIPPED: correction_std=%.4f < 0.005",
+                 _cc2_std)
+
     # ── Left/right collimator masking ─────────────────────────────────
     #   Two-stage detection:
     #   1. Dark-column boundaries (_exposure_left/_exposure_right) from
