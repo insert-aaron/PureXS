@@ -2468,11 +2468,38 @@ def reconstruct_image(
     else:
         _col_means = np.mean(img_f, axis=0)
 
-    # Use the exposure boundaries detected after dark correction — these
-    # are the reliable left/right limits of actual X-ray signal.  Inset
-    # by 30 cols on each side to avoid collimator-fade contamination.
+    # Detect the active content range in the LINEAR domain.
+    #   _exposure_left only marks dark vs signal — when the scan starts
+    #   with the X-ray already on (no dark pre-scan), _exposure_left ≈ 0
+    #   and the first ~200 columns are flat direct beam (no anatomy).
+    #   Including these in the Gaussian baseline corrupts the correction.
+    #
+    #   Detect per-column variance: anatomy has high row-to-row variation,
+    #   flat direct beam has near-zero variance.
+    _COL_STD_THRESH = 0.10  # fraction of column mean — below = flat beam
+    _col_stds = np.std(img_f[_meas_rows, :], axis=0) if len(_meas_rows) > 100 \
+        else np.std(img_f, axis=0)
+    _col_rel_std = np.where(_col_means > 1.0, _col_stds / _col_means, 0.0)
+
+    # Scan from left: find first column with relative std > threshold
     _active_start = min(_exposure_left + 30, width - 1)
+    for c in range(_exposure_left, min(_exposure_left + width // 4, width)):
+        if _col_rel_std[c] > _COL_STD_THRESH:
+            _active_start = c + 10  # inset slightly past the transition
+            break
+
+    # Scan from right: find last column with relative std > threshold
     _active_end = max(_exposure_right - 30, _active_start + 1)
+    for c in range(_exposure_right, max(_exposure_right - width // 4, -1), -1):
+        if _col_rel_std[c] > _COL_STD_THRESH:
+            _active_end = c - 10
+            break
+
+    _active_end = max(_active_end, _active_start + 1)
+    log.info("Column correction active range: [%d, %d] "
+             "(exposure=[%d,%d], content-std threshold=%.2f)",
+             _active_start, _active_end, _exposure_left, _exposure_right,
+             _COL_STD_THRESH)
 
     # Compute median signal in the active region.  If too low (phantom
     # or empty scan), skip the correction — there's no frame-group
@@ -2500,9 +2527,17 @@ def reconstruct_image(
         _correction[_active_start:_active_end] = 1.0 / _safe_ratio
         # Clip: max ±15% correction per column (safety limit)
         _correction = np.clip(_correction, 0.85, 1.15)
+        log.info("Column profile correction APPLIED: sigma=%d  "
+                 "active=[%d,%d] (%d cols)  median_signal=%.0f",
+                 COL_SMOOTH_SIGMA, _active_start, _active_end,
+                 _active_end - _active_start, _active_median)
     else:
         log.info("Column profile correction SKIPPED: median signal=%.1f "
                  "(min=%.1f)", _active_median, _COL_CORRECT_MIN_SIGNAL)
+
+    # Store content boundary for later use by display-domain masking
+    _linear_content_left = _active_start
+    _linear_content_right = _active_end
 
     # Save debug: before correction (percentile stretch for visibility)
     _p2, _p98 = np.percentile(img_f[img_f > 0], [2, 98]) if np.any(img_f > 0) else (0, 1)
@@ -2774,9 +2809,11 @@ def reconstruct_image(
     else:
         _content_right = lin_right_edge
 
-    # Use the further-inward of the two detections
-    lin_left_edge = max(lin_left_edge, _content_left)
-    lin_right_edge = min(lin_right_edge, _content_right)
+    # Use the further-inward of all detections (dark, display-std, linear-std)
+    lin_left_edge = max(lin_left_edge, _content_left,
+                        _linear_content_left if '_linear_content_left' in dir() else 0)
+    lin_right_edge = min(lin_right_edge, _content_right,
+                         _linear_content_right if '_linear_content_right' in dir() else width)
 
     log.info("Content boundaries: left=%d (dark=%d, content=%d)  "
              "right=%d (dark=%d, content=%d)",
