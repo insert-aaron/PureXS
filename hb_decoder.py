@@ -2853,24 +2853,28 @@ def reconstruct_image(
             break  # found a non-spiking row — stop scanning upward
 
     if _spike_start_bot < height - 2:
-        # Apply per-column clamping: for each spiking row, clamp brightness
-        # to the reference level (preserving relative structure within the row)
-        for r in range(_spike_start_bot, height):
+        # Apply per-column clamping with a smooth fade-in zone above the
+        # spike boundary.  Without the fade, the hard clamp creates a
+        # bright horizontal line at _spike_start_bot.
+        SPIKE_BLEND = 30  # rows of gradual transition above spike start
+        cap = _ref_band_bot * 1.05
+        blend_start = max(0, _spike_start_bot - SPIKE_BLEND)
+        for r in range(blend_start, height):
             row_data = _img_fc[r, :]
-            # How deep into the spike zone are we?
-            depth = r - _spike_start_bot  # 0 at start, grows toward bottom
-            total_depth = height - _spike_start_bot
-            # Fade: at spike_start use full correction, at bottom also full
-            # Clamp each pixel to min(pixel, reference * 1.05)
-            cap = _ref_band_bot * 1.05
-            _img_fc[r, :] = np.minimum(row_data, cap)
-        # Additionally, fade the last few rows to black (detector edge)
+            clamped = np.minimum(row_data, cap)
+            if r < _spike_start_bot:
+                # Fade-in zone: blend from 0% clamping to 100%
+                alpha = (r - blend_start) / SPIKE_BLEND  # 0→1
+                _img_fc[r, :] = row_data * (1 - alpha) + clamped * alpha
+            else:
+                _img_fc[r, :] = clamped
+        # Fade the last few rows to black (detector edge)
         _edge_fade = min(8, height - _spike_start_bot)
         for r in range(height - _edge_fade, height):
             t = (height - r) / _edge_fade
             _img_fc[r, :] *= t
-        log.info("Bottom spike suppression: rows %d-%d clamped (ratio>%.2f)",
-                 _spike_start_bot, height - 1, SPIKE_THRESH)
+        log.info("Bottom spike suppression: rows %d-%d clamped, blend=%d (ratio>%.2f)",
+                 _spike_start_bot, height - 1, SPIKE_BLEND, SPIKE_THRESH)
 
     # --- Top spike suppression ---
     _ref_lo_t = int(height * 0.15)
@@ -2895,13 +2899,23 @@ def reconstruct_image(
 
     if _spike_end_top > 0:
         cap_t = _ref_band_top * 1.05
-        for r in range(0, _spike_end_top + 1):
-            _img_fc[r, :] = np.minimum(_img_fc[r, :], cap_t)
+        SPIKE_BLEND_T = 30  # fade-out zone below spike end
+        blend_end_t = min(height, _spike_end_top + 1 + SPIKE_BLEND_T)
+        for r in range(0, blend_end_t):
+            row_data = _img_fc[r, :]
+            clamped = np.minimum(row_data, cap_t)
+            if r > _spike_end_top:
+                # Fade-out zone: blend from 100% clamping back to 0%
+                alpha = 1.0 - (r - _spike_end_top - 1) / SPIKE_BLEND_T  # 1→0
+                _img_fc[r, :] = row_data * (1 - alpha) + clamped * alpha
+            else:
+                _img_fc[r, :] = clamped
         _edge_fade_t = min(8, _spike_end_top + 1)
         for r in range(0, _edge_fade_t):
             t = r / _edge_fade_t
             _img_fc[r, :] *= t
-        log.info("Top spike suppression: rows 0-%d clamped", _spike_end_top)
+        log.info("Top spike suppression: rows 0-%d clamped, blend=%d",
+                 _spike_end_top, SPIKE_BLEND_T)
 
     img_8bit = np.clip(_img_fc, 0, 255).astype(np.uint8)
 
