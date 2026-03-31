@@ -2734,12 +2734,54 @@ def reconstruct_image(
     log.info("DEBUG saved: debug_stage09_tone_lut.png")
 
     # ── Left/right collimator masking ─────────────────────────────────
-    #   Use the exposure boundaries detected right after dark correction
-    #   (where zero-signal columns are unambiguous) to mask the pre/post
-    #   exposure dead columns that invert to white.
+    #   Two-stage detection:
+    #   1. Dark-column boundaries (_exposure_left/_exposure_right) from
+    #      dark correction — catches pre/post exposure dead columns.
+    #   2. Content boundary detection — catches direct-beam columns that
+    #      have signal but no anatomy (flat, high brightness, low variance).
+    #      This handles scans where X-ray starts before capture begins
+    #      (no dark pre-scan period), leaving _exposure_left near 0.
     FADE_WIDTH = 25
+
+    # Stage 1: dark-column boundaries
     lin_left_edge = _exposure_left
     lin_right_edge = _exposure_right
+
+    # Stage 2: content boundary detection
+    #   Scan from each edge inward looking for where per-column variance
+    #   rises (anatomy) vs flat direct beam (bright, uniform).
+    _meas_slice = slice(height // 4, height * 3 // 4)
+    _content_left = lin_left_edge
+    _content_right = lin_right_edge
+    _CONTENT_STD_THRESH = 12.0  # per-column std below this = no anatomy
+    _CONTENT_SCAN_MAX = width // 4  # don't scan more than 25% of width
+
+    # Left: scan rightward from lin_left_edge
+    for c in range(lin_left_edge, min(lin_left_edge + _CONTENT_SCAN_MAX, width)):
+        col_std = float(np.std(img_8bit[_meas_slice, c].astype(np.float32)))
+        if col_std > _CONTENT_STD_THRESH:
+            _content_left = c
+            break
+    else:
+        _content_left = lin_left_edge
+
+    # Right: scan leftward from lin_right_edge
+    for c in range(lin_right_edge, max(lin_right_edge - _CONTENT_SCAN_MAX, -1), -1):
+        col_std = float(np.std(img_8bit[_meas_slice, c].astype(np.float32)))
+        if col_std > _CONTENT_STD_THRESH:
+            _content_right = c
+            break
+    else:
+        _content_right = lin_right_edge
+
+    # Use the further-inward of the two detections
+    lin_left_edge = max(lin_left_edge, _content_left)
+    lin_right_edge = min(lin_right_edge, _content_right)
+
+    log.info("Content boundaries: left=%d (dark=%d, content=%d)  "
+             "right=%d (dark=%d, content=%d)",
+             lin_left_edge, _exposure_left, _content_left,
+             lin_right_edge, _exposure_right, _content_right)
 
     # Fade left edge
     for c in range(min(width, lin_left_edge + FADE_WIDTH)):
@@ -2757,7 +2799,7 @@ def reconstruct_image(
             t = (lin_right_edge - c) / FADE_WIDTH
             img_8bit[:, c] = (img_8bit[:, c].astype(np.float32) * t).astype(np.uint8)
 
-    log.info("Collimator L/R edges (dark-corrected): left=%d, right=%d (fade=%d)",
+    log.info("Collimator L/R edges: left=%d, right=%d (fade=%d)",
              lin_left_edge, lin_right_edge, FADE_WIDTH)
 
     # ── Top/bottom collimator fade (display domain) ────────────────
@@ -2930,6 +2972,60 @@ def reconstruct_image(
     # DEBUG: save result
     Image.fromarray(img_8bit).save("debug_stage11_edge_spike.png")
     log.info("DEBUG saved: debug_stage11_edge_spike.png")
+
+    # ── Die junction equalization ──────────────────────────────────
+    #   The upper and lower CMOS dies have independent gain.  After all
+    #   corrections, a brightness step may remain at the die boundary.
+    #   Measure the mean brightness of interior rows well above and
+    #   below the junction, compute a scale factor, and blend it
+    #   smoothly across the junction zone.
+    #   The die boundary in the original detector is at row 580;
+    #   after row_top=18 crop offset it maps to ~562 in cropped coords.
+    #   But the image is still uncropped here (1316 rows), so use
+    #   original detector coords.
+    DIE_BOUNDARY = dead_row if 'dead_row' in dir() else 580
+    DIE_BLEND = 60  # ±60 rows cosine blend
+    _meas_cols = slice(300, min(width - 300, 2100))
+
+    # Reference bands well away from the junction
+    _upper_ref_rows = slice(max(0, DIE_BOUNDARY - 200), max(0, DIE_BOUNDARY - 80))
+    _lower_ref_rows = slice(min(height, DIE_BOUNDARY + 80), min(height, DIE_BOUNDARY + 200))
+    _upper_ref = float(np.mean(img_8bit[_upper_ref_rows, _meas_cols].astype(np.float32)))
+    _lower_ref = float(np.mean(img_8bit[_lower_ref_rows, _meas_cols].astype(np.float32)))
+
+    if _lower_ref > 1.0 and _upper_ref > 1.0:
+        _die_scale = np.clip(_upper_ref / _lower_ref, 0.90, 1.10)
+        _img_die = img_8bit.astype(np.float32)
+
+        if abs(_die_scale - 1.0) > 0.005:
+            # Apply scale to lower die with cosine blend across junction
+            _blend_lo = max(0, DIE_BOUNDARY - DIE_BLEND)
+            _blend_hi = min(height, DIE_BOUNDARY + DIE_BLEND)
+            for r in range(_blend_lo, _blend_hi):
+                t = (r - _blend_lo) / max(_blend_hi - _blend_lo, 1)
+                # Cosine ramp: 0 at _blend_lo (no correction), 1 at _blend_hi
+                blend = 0.5 * (1.0 - np.cos(np.pi * t))
+                row_scale = 1.0 + (_die_scale - 1.0) * blend
+                _img_die[r, :] *= row_scale
+            # Full scale for all rows below the blend zone
+            _img_die[_blend_hi:, :] *= _die_scale
+            img_8bit = np.clip(_img_die, 0, 255).astype(np.uint8)
+
+            # Verify
+            _upper_after = float(np.mean(img_8bit[_upper_ref_rows, _meas_cols].astype(np.float32)))
+            _lower_after = float(np.mean(img_8bit[_lower_ref_rows, _meas_cols].astype(np.float32)))
+            _ratio_after = _upper_after / max(_lower_after, 1)
+            log.info("Die junction eq: scale=%.4f  before=%.1f/%.1f(%.4f)  "
+                     "after=%.1f/%.1f(%.4f)  blend=%d-%d",
+                     _die_scale, _upper_ref, _lower_ref, _upper_ref / _lower_ref,
+                     _upper_after, _lower_after, _ratio_after,
+                     _blend_lo, _blend_hi)
+        else:
+            log.info("Die junction eq: scale=%.4f (within 0.5%%, skipped)",
+                     _die_scale)
+    else:
+        log.info("Die junction eq: skipped (low signal: upper=%.1f lower=%.1f)",
+                 _upper_ref, _lower_ref)
 
     # ── Crop to standard output size ───────────────────────────────
     #   Sidexis outputs 2440×1280 from the raw 2706×1316.
