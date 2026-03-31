@@ -2444,6 +2444,88 @@ def reconstruct_image(
     Image.fromarray(_dbg).save("debug_stage05_telem_repair.png")
     log.info("DEBUG saved: debug_stage05_telem_repair.png")
 
+    # ── Column profile correction (linear domain) ───────────────────
+    #   Corrects mid-frequency gain drift across groups of TCP frames
+    #   (~25-500 column regions) caused by kV ramp, detector drift,
+    #   and per-frame equalization residuals.
+    #
+    #   Uses a RATIO approach: for each column, compute
+    #       ratio = col_mean / smooth(col_mean, sigma=200)
+    #   This ratio captures only deviations from the slowly-varying
+    #   beam profile (bell curve). Dividing by the ratio flattens
+    #   frame-group steps without altering the natural gradient.
+    from scipy.ndimage import gaussian_filter1d as _gf1d
+
+    # Use rows that avoid dead zone and telemetry for clean measurement
+    _meas_rows_upper = [r for r in range(50, min(anchor_above, height))
+                        if not (telem_row_lo <= r < telem_row_hi)]
+    _meas_rows_lower = [r for r in range(min(anchor_below + 1, height),
+                                         max(height - 30, 0))
+                        if not (telem_row_lo <= r < telem_row_hi)]
+    _meas_rows = _meas_rows_upper + _meas_rows_lower
+    if len(_meas_rows) > 100:
+        _col_means = np.mean(img_f[_meas_rows, :], axis=0)
+    else:
+        _col_means = np.mean(img_f, axis=0)
+
+    # Use the exposure boundaries detected after dark correction — these
+    # are the reliable left/right limits of actual X-ray signal.  Inset
+    # by 30 cols on each side to avoid collimator-fade contamination.
+    _active_start = min(_exposure_left + 30, width - 1)
+    _active_end = max(_exposure_right - 30, _active_start + 1)
+
+    # Compute median signal in the active region.  If too low (phantom
+    # or empty scan), skip the correction — there's no frame-group
+    # banding to fix when there's no X-ray signal.
+    _active_means = _col_means[_active_start:_active_end].astype(np.float64)
+    _active_median = float(np.median(_active_means))
+    _COL_CORRECT_MIN_SIGNAL = 50.0  # linear-domain minimum (well above noise)
+
+    _correction = np.ones(width, dtype=np.float32)
+    if _active_median >= _COL_CORRECT_MIN_SIGNAL and len(_active_means) > 100:
+        # Smooth the column profile with a wide Gaussian to get the "expected"
+        # beam shape.  sigma=200 cols spans ~400 cols (8+ frame groups) — this
+        # preserves the natural jaw-arch gradient while averaging out frame-group
+        # steps (which are 25-300 cols wide).
+        COL_SMOOTH_SIGMA = 200
+        _smooth = _gf1d(_active_means, sigma=COL_SMOOTH_SIGMA).astype(np.float32)
+
+        # Ratio: how each column deviates from the smooth beam profile
+        # Values >1 = column is brighter than expected, <1 = dimmer
+        _safe_smooth = np.where(_smooth > 1.0, _smooth, 1.0)
+        _ratio = (_active_means / _safe_smooth).astype(np.float32)
+
+        # The correction is 1/ratio — divides out the deviation
+        _safe_ratio = np.where(np.abs(_ratio) > 0.01, _ratio, 1.0)
+        _correction[_active_start:_active_end] = 1.0 / _safe_ratio
+        # Clip: max ±15% correction per column (safety limit)
+        _correction = np.clip(_correction, 0.85, 1.15)
+    else:
+        log.info("Column profile correction SKIPPED: median signal=%.1f "
+                 "(min=%.1f)", _active_median, _COL_CORRECT_MIN_SIGNAL)
+
+    # Save debug: before correction (percentile stretch for visibility)
+    _p2, _p98 = np.percentile(img_f[img_f > 0], [2, 98]) if np.any(img_f > 0) else (0, 1)
+    _dbg = np.clip((img_f - _p2) / max(_p98 - _p2, 1) * 255, 0, 255).astype(np.uint8)
+    Image.fromarray(_dbg).save("debug_before_colcorrect.png")
+
+    # Apply correction to every row
+    img_f *= _correction[np.newaxis, :]
+
+    # Save debug: after correction
+    _dbg = np.clip((img_f - _p2) / max(_p98 - _p2, 1) * 255, 0, 255).astype(np.uint8)
+    Image.fromarray(_dbg).save("debug_after_colcorrect.png")
+
+    # Log correction summary
+    _corr_active = _correction[_active_start:_active_end]
+    _n_clipped = int(np.sum((_corr_active <= 0.851) | (_corr_active >= 1.149)))
+    _corr_std = float(np.std(_corr_active))
+    log.info("Column profile correction: active=[%d,%d]  median_signal=%.0f  "
+             "correction_std=%.4f  range=[%.4f, %.4f]  clipped=%d/%d",
+             _active_start, _active_end, _active_median,
+             _corr_std, float(_corr_active.min()), float(_corr_active.max()),
+             _n_clipped, len(_corr_active))
+
     # DEBUG: save pre-MUSICA (after gamma, before MUSICA)
     # (inserted below after img_norm is computed)
 
