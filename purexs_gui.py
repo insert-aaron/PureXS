@@ -381,6 +381,7 @@ class PureXSApp(ctk.CTk):
         self._last_status: str = "OFFLINE"
         self._expose_count: int = 0
         self._photo_image: ImageTk.PhotoImage | None = None  # prevent GC
+        self._last_pil_image: Image.Image | None = None     # for resize re-render
         self._last_raw_image: bytes = b""
 
         # ── Patient workflow state ─────────────────────────────────────────────
@@ -462,59 +463,13 @@ class PureXSApp(ctk.CTk):
         )
         logo_label.pack(side="left", padx=(12, 20))
 
-        # ── Device MAC combo ─────────────────────────────────────────────────
-        ctk.CTkLabel(
-            toolbar, text="Device:", font=ctk.CTkFont(size=12)
-        ).pack(side="left", padx=(0, 4))
-
+        # Hidden device state (no UI — direct TCP auto-connects)
         self._mac_var = ctk.StringVar(value="")
-        self._mac_combo = ctk.CTkComboBox(
-            toolbar,
-            variable=self._mac_var,
-            values=["(scan for devices)"],
-            width=220,
-            font=ctk.CTkFont(family="Consolas", size=12),
-            state="readonly",
-        )
-        self._mac_combo.pack(side="left", padx=4)
-
-        # ── Scan button ──────────────────────────────────────────────────────
-        self._scan_btn = ctk.CTkButton(
-            toolbar,
-            text="Scan (F5)",
-            width=90,
-            command=self._on_scan,
-            fg_color="#37474F",
-            hover_color="#455A64",
-        )
-        self._scan_btn.pack(side="left", padx=4)
-
-        # ── Connect / Disconnect ─────────────────────────────────────────────
-        self._connect_btn = ctk.CTkButton(
-            toolbar,
-            text="Connect",
-            width=100,
-            command=self._on_connect,
-            fg_color="#1B5E20",
-            hover_color="#2E7D32",
-        )
-        self._connect_btn.pack(side="left", padx=4)
-
-        self._disconnect_btn = ctk.CTkButton(
-            toolbar,
-            text="Disconnect (Esc)",
-            width=130,
-            command=self._on_disconnect,
-            fg_color="#B71C1C",
-            hover_color="#C62828",
-            state="disabled",
-        )
-        self._disconnect_btn.pack(side="left", padx=4)
 
         # ── Direct TCP HB monitor button ─────────────────────────────────────
         self._hb_monitor_btn = ctk.CTkButton(
             toolbar,
-            text="\u2764 Monitor HB",
+            text="Connect to Device",
             width=120,
             command=self._on_toggle_hb_monitor,
             fg_color="#4A148C",
@@ -573,17 +528,46 @@ class PureXSApp(ctk.CTk):
 
     def _build_main_area(self) -> None:
         """Middle area: left panel (controls + log), right panel (image)."""
-        main = ctk.CTkFrame(self, fg_color="transparent")
+        self._main_grid = ctk.CTkFrame(self, fg_color="transparent")
+        main = self._main_grid
         main.pack(fill="both", expand=True, padx=8, pady=(4, 0))
-        main.columnconfigure(0, weight=1, minsize=380)
-        main.columnconfigure(1, weight=2, minsize=400)
+        main.columnconfigure(0, weight=0, minsize=90)   # patient dock
+        main.columnconfigure(1, weight=1, minsize=300)   # controls
+        main.columnconfigure(2, weight=2, minsize=400)   # canvas
         main.rowconfigure(0, weight=1)
 
         # ═══════════════════════════════════════════════════════════════════
-        # LEFT PANEL: status, params, expose button, log
+        # PATIENT DOCK (far left — vertical scrollable avatar strip)
+        # ═══════════════════════════════════════════════════════════════════
+        self._dock_frame = ctk.CTkFrame(main, corner_radius=10, fg_color="#0D1117", width=88)
+        self._dock_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4), pady=0)
+        self._dock_frame.grid_propagate(False)
+        self._dock_visible = True
+
+        # Hidden refs for search compatibility
+        self._purechart_search_var = ctk.StringVar(value="")
+        self._purechart_debounce_id: str | None = None
+        self._purechart_status = ctk.CTkLabel(
+            self._dock_frame, text="", font=ctk.CTkFont(size=8),
+            text_color="#757575", wraplength=76,
+        )
+        self._purechart_status.pack(padx=4, pady=(6, 2))
+
+        # Scrollable avatar column (single column, vertical)
+        self._avatar_dock_frame = ctk.CTkScrollableFrame(
+            self._dock_frame, fg_color="#0D1117", corner_radius=0,
+            width=76, label_text="",
+        )
+        self._avatar_dock_frame.pack(fill="both", expand=True, padx=2, pady=(0, 4))
+        self._avatar_tiles: list[dict] = []
+        self._avatar_photos: dict = {}   # (patient_id, size) → PhotoImage
+        self._avatar_raw_bytes: dict[str, bytes] = {}  # patient_id → raw image bytes
+
+        # ═══════════════════════════════════════════════════════════════════
+        # LEFT PANEL: status, patient card, expose button, log
         # ═══════════════════════════════════════════════════════════════════
         left = ctk.CTkFrame(main, corner_radius=8)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 4), pady=0)
+        left.grid(row=0, column=1, sticky="nsew", padx=(0, 4), pady=0)
         left.rowconfigure(4, weight=1)  # log expands
 
         # ── Status section ───────────────────────────────────────────────
@@ -593,34 +577,36 @@ class PureXSApp(ctk.CTk):
         self._status_label = ctk.CTkLabel(
             status_frame,
             text="OFFLINE",
-            font=ctk.CTkFont(family="Segoe UI", size=28, weight="bold"),
+            font=ctk.CTkFont(size=13, weight="bold"),
             text_color="#616161",
+            wraplength=260,
         )
-        self._status_label.pack(pady=(12, 2))
+        self._status_label.pack(pady=(8, 2))
 
         self._device_info_label = ctk.CTkLabel(
             status_frame,
             text="No device connected",
-            font=ctk.CTkFont(size=11),
+            font=ctk.CTkFont(size=10),
             text_color="#757575",
         )
-        self._device_info_label.pack(pady=(0, 4))
+        self._device_info_label.pack(pady=(0, 2))
 
         # ── Progress bar (indeterminate during scan/acquire) ─────────────
         self._progress = ctk.CTkProgressBar(
-            status_frame, mode="indeterminate", width=300
+            status_frame, mode="indeterminate", width=260
         )
-        self._progress.pack(pady=(0, 4), padx=16)
+        self._progress.pack(pady=(0, 2), padx=12)
         self._progress.set(0)
 
         # ── Gantry / acquisition phase label ──────────────────────────
         self._phase_label = ctk.CTkLabel(
             status_frame,
             text="",
-            font=ctk.CTkFont(family="Consolas", size=10),
+            font=ctk.CTkFont(size=9),
             text_color="#757575",
+            wraplength=260,
         )
-        self._phase_label.pack(pady=(0, 8))
+        self._phase_label.pack(pady=(0, 6))
 
         # ── Patient panel ───────────────────────────────────────────────
         patient_frame = ctk.CTkFrame(left, corner_radius=8, fg_color="#1B2631")
@@ -632,74 +618,29 @@ class PureXSApp(ctk.CTk):
             text_color="#81D4FA",
         ).pack(pady=(8, 2))
 
-        # Recent patients dropdown
-        recent_row = ctk.CTkFrame(patient_frame, fg_color="transparent")
-        recent_row.pack(fill="x", padx=12, pady=(0, 4))
-        ctk.CTkLabel(recent_row, text="Recent:", width=65, anchor="e").grid(
-            row=0, column=0, padx=(0, 4), sticky="e"
-        )
+        # Hidden refs for compatibility
         self._recent_var = ctk.StringVar(value="")
-        self._recent_combo = ctk.CTkComboBox(
-            recent_row, variable=self._recent_var,
-            values=["(none)"], width=195,
-            command=self._on_recent_patient_selected,
-            state="readonly",
-        )
-        self._recent_combo.grid(row=0, column=1, sticky="w")
+        self._purechart_row = patient_frame  # reference for pack_configure
 
-        # PHASE 1+2 — PureChart patient search
-        self._purechart_row = ctk.CTkFrame(patient_frame, fg_color="transparent")
-        purechart_row = self._purechart_row
-        purechart_row.pack(fill="x", padx=12, pady=(0, 4))
-        ctk.CTkLabel(purechart_row, text="PureChart:", width=65, anchor="e").grid(
-            row=0, column=0, padx=(0, 4), sticky="e"
-        )
-        # PHASE 2 — search entry with debounced type-to-search
-        self._purechart_search_var = ctk.StringVar(value="")
-        self._purechart_entry = ctk.CTkEntry(
-            purechart_row, textvariable=self._purechart_search_var,
-            width=195, placeholder_text="Type to search patients...",
-        )
-        self._purechart_entry.grid(row=0, column=1, sticky="w")
-        self._purechart_debounce_id: str | None = None  # PHASE 2 debounce timer
-        self._purechart_search_var.trace_add("write", self._on_purechart_search_typed)
-        # PHASE 1+2 — results dropdown (populated by search)
-        self._purechart_var = ctk.StringVar(value="")
-        self._purechart_combo = ctk.CTkComboBox(
-            purechart_row, variable=self._purechart_var,
-            values=["(type above to search)"], width=195,
-            command=self._on_purechart_patient_selected,
-            state="readonly",
-        )
-        self._purechart_combo.grid(row=1, column=1, sticky="w", pady=(2, 0))
-        self._purechart_status = ctk.CTkLabel(
-            purechart_row, text="", font=ctk.CTkFont(size=9),
-            text_color="#757575",
-        )
-        self._purechart_status.grid(row=2, column=1, sticky="w")
-
-        # ── Patient profile card (shown when PureChart patient selected) ───
+        # ── Selected patient profile card ───────────────────────────────
         self._profile_card = ctk.CTkFrame(patient_frame, fg_color="#162029", corner_radius=8)
-        # Hidden by default — shown when a patient is selected
         self._profile_card_visible = False
 
         profile_top = ctk.CTkFrame(self._profile_card, fg_color="transparent")
         profile_top.pack(fill="x", padx=10, pady=(8, 4))
 
-        # Circular-ish avatar area (80x80 canvas)
         self._profile_avatar_canvas = tk.Canvas(
             profile_top, width=64, height=64,
             bg="#162029", highlightthickness=0,
         )
         self._profile_avatar_canvas.pack(side="left", padx=(0, 10))
-        # Draw placeholder initials circle
         self._profile_avatar_canvas.create_oval(2, 2, 62, 62, fill="#37474F", outline="#546E7A", width=2)
         self._profile_initials = self._profile_avatar_canvas.create_text(
             32, 32, text="?", fill="#B0BEC5",
             font=("Helvetica", 18, "bold"),
         )
+        self._profile_photo = None
 
-        # Patient info labels (right of avatar)
         profile_info = ctk.CTkFrame(profile_top, fg_color="transparent")
         profile_info.pack(side="left", fill="both", expand=True)
 
@@ -730,6 +671,15 @@ class PureXSApp(ctk.CTk):
             text_color="#90A4AE", anchor="w",
         )
         self._profile_phone_label.pack(fill="x")
+
+        # Change Patient button (re-shows dock)
+        self._change_patient_btn = ctk.CTkButton(
+            self._profile_card, text="Change Patient",
+            width=120, height=24, font=ctk.CTkFont(size=10),
+            fg_color="#37474F", hover_color="#455A64",
+            command=self._on_change_patient,
+        )
+        self._change_patient_btn.pack(pady=(2, 8))
 
         # PHASE 5 — Upload status bar with progress + retry
         upload_row = ctk.CTkFrame(patient_frame, fg_color="#162029", corner_radius=6)
@@ -785,12 +735,7 @@ class PureXSApp(ctk.CTk):
         self._pt_id = ctk.CTkEntry(pg, width=195, placeholder_text="(auto if blank)")
         self._pt_id.grid(row=3, column=1, pady=2, sticky="w")
 
-        ctk.CTkLabel(pg, text="Exam:", width=65, anchor="e").grid(
-            row=4, column=0, padx=(0, 4), pady=2, sticky="e")
         self._pt_exam_var = ctk.StringVar(value="Panoramic")
-        ctk.CTkOptionMenu(
-            pg, variable=self._pt_exam_var, values=EXAM_TYPES, width=195,
-        ).grid(row=4, column=1, pady=2, sticky="w")
 
         # Set / Clear buttons
         btn_row = ctk.CTkFrame(patient_frame, fg_color="transparent")
@@ -819,70 +764,11 @@ class PureXSApp(ctk.CTk):
         # Load recent patients on startup
         self._load_recent_patients()
 
-        # ── Exposure parameters ──────────────────────────────────────────
-        params_frame = ctk.CTkFrame(left, corner_radius=8)
-        params_frame.pack(fill="x", padx=8, pady=4)
-
-        ctk.CTkLabel(
-            params_frame,
-            text="Exposure Parameters",
-            font=ctk.CTkFont(size=13, weight="bold"),
-        ).pack(pady=(8, 4))
-
-        param_grid = ctk.CTkFrame(params_frame, fg_color="transparent")
-        param_grid.pack(fill="x", padx=12, pady=(0, 8))
-
-        # Program
-        ctk.CTkLabel(param_grid, text="Program:", anchor="e", width=80).grid(
-            row=0, column=0, padx=(0, 4), pady=2, sticky="e"
-        )
+        # Exposure parameter defaults (no UI — device uses fixed values)
         self._program_var = ctk.StringVar(value="Panoramic")
-        ctk.CTkComboBox(
-            param_grid,
-            variable=self._program_var,
-            values=list(PROGRAMS.keys()),
-            width=170,
-            state="readonly",
-        ).grid(row=0, column=1, pady=2, sticky="w")
-
-        # Patient Size
-        ctk.CTkLabel(param_grid, text="Patient:", anchor="e", width=80).grid(
-            row=1, column=0, padx=(0, 4), pady=2, sticky="e"
-        )
         self._patient_var = ctk.StringVar(value="Adult M")
-        ctk.CTkComboBox(
-            param_grid,
-            variable=self._patient_var,
-            values=list(PATIENT_SIZES.keys()),
-            width=170,
-            state="readonly",
-        ).grid(row=1, column=1, pady=2, sticky="w")
-
-        # kV
-        ctk.CTkLabel(param_grid, text="kV:", anchor="e", width=80).grid(
-            row=2, column=0, padx=(0, 4), pady=2, sticky="e"
-        )
         self._kv_var = ctk.StringVar(value="73")
-        ctk.CTkComboBox(
-            param_grid,
-            variable=self._kv_var,
-            values=KV_OPTIONS,
-            width=170,
-            state="readonly",
-        ).grid(row=2, column=1, pady=2, sticky="w")
-
-        # mA
-        ctk.CTkLabel(param_grid, text="mA:", anchor="e", width=80).grid(
-            row=3, column=0, padx=(0, 4), pady=2, sticky="e"
-        )
         self._ma_var = ctk.StringVar(value="8.0")
-        ctk.CTkComboBox(
-            param_grid,
-            variable=self._ma_var,
-            values=MA_OPTIONS,
-            width=170,
-            state="readonly",
-        ).grid(row=3, column=1, pady=2, sticky="w")
 
         # ── EXPOSE BUTTON ────────────────────────────────────────────────
         expose_frame = ctk.CTkFrame(left, fg_color="transparent")
@@ -914,11 +800,11 @@ class PureXSApp(ctk.CTk):
         )
         self._expose_count_label.pack()
 
-        # ── kV gauge (direct TCP expose) ─────────────────────────────
-        kv_frame = ctk.CTkFrame(left, corner_radius=8, fg_color="#1A1A2E")
-        kv_frame.pack(fill="x", padx=8, pady=4)
+        # ── kV gauge (direct TCP expose) — hidden until expose ────────
+        self._kv_frame = ctk.CTkFrame(left, corner_radius=8, fg_color="#1A1A2E")
+        # Not packed — shown during expose
 
-        kv_header = ctk.CTkFrame(kv_frame, fg_color="transparent")
+        kv_header = ctk.CTkFrame(self._kv_frame, fg_color="transparent")
         kv_header.pack(fill="x", padx=8, pady=(6, 0))
 
         ctk.CTkLabel(
@@ -935,17 +821,17 @@ class PureXSApp(ctk.CTk):
         self._kv_value_label.pack(side="right")
 
         self._kv_progress = ctk.CTkProgressBar(
-            kv_frame, mode="determinate", width=280,
+            self._kv_frame, mode="determinate", width=280,
             progress_color="#FF6F00", fg_color="#263238",
         )
         self._kv_progress.pack(pady=(4, 8), padx=16)
         self._kv_progress.set(0)
 
-        # ── Scanline preview (direct TCP) ────────────────────────────
-        scan_preview_frame = ctk.CTkFrame(left, corner_radius=8)
-        scan_preview_frame.pack(fill="both", expand=True, padx=8, pady=4)
+        # ── Scanline preview (direct TCP) — hidden until expose ──────
+        self._scan_preview_frame = ctk.CTkFrame(left, corner_radius=8)
+        # Not packed — shown during expose
 
-        scan_preview_header = ctk.CTkFrame(scan_preview_frame, fg_color="transparent")
+        scan_preview_header = ctk.CTkFrame(self._scan_preview_frame, fg_color="transparent")
         scan_preview_header.pack(fill="x", padx=8, pady=(6, 0))
 
         ctk.CTkLabel(
@@ -961,13 +847,13 @@ class PureXSApp(ctk.CTk):
         self._scanline_count_label.pack(side="right")
 
         self._scanline_canvas = tk.Canvas(
-            scan_preview_frame, bg="#0A0A0A", height=240,
+            self._scan_preview_frame, bg="#0A0A0A", height=200,
             highlightthickness=0,
         )
         self._scanline_canvas.pack(fill="both", expand=True, padx=8, pady=(4, 4))
 
         self._save_pano_btn = ctk.CTkButton(
-            scan_preview_frame,
+            self._scan_preview_frame,
             text="\U0001F4BE Save Panoramic",
             width=140, height=26,
             font=ctk.CTkFont(size=10),
@@ -977,46 +863,20 @@ class PureXSApp(ctk.CTk):
         )
         self._save_pano_btn.pack(pady=(0, 6))
 
-        # ── Log area ────────────────────────────────────────────────────
-        log_frame = ctk.CTkFrame(left, corner_radius=8)
-        log_frame.pack(fill="both", expand=True, padx=8, pady=(4, 8))
+        # Hidden log frame ref (for kV/scanline pack ordering)
+        self._log_frame = ctk.CTkFrame(left, height=0, fg_color="transparent")
+        self._log_frame.pack(side="bottom")
 
-        log_header = ctk.CTkFrame(log_frame, fg_color="transparent")
-        log_header.pack(fill="x", padx=8, pady=(6, 0))
-
-        ctk.CTkLabel(
-            log_header,
-            text="Event Log",
-            font=ctk.CTkFont(size=12, weight="bold"),
-        ).pack(side="left")
-
-        ctk.CTkButton(
-            log_header,
-            text="Clear",
-            width=50,
-            height=22,
-            font=ctk.CTkFont(size=10),
-            fg_color="#37474F",
-            hover_color="#455A64",
-            command=self._clear_log,
-        ).pack(side="right")
-
+        # Hidden log textbox (methods still write to it)
         self._log_text = ctk.CTkTextbox(
-            log_frame,
-            font=ctk.CTkFont(family="Consolas", size=11),
-            wrap="word",
-            state="disabled",
-            fg_color="#0D1117",
-            text_color="#C9D1D9",
-            corner_radius=4,
+            self._log_frame, height=0, state="disabled",
         )
-        self._log_text.pack(fill="both", expand=True, padx=8, pady=(4, 8))
 
         # ═══════════════════════════════════════════════════════════════════
         # RIGHT PANEL: image viewer + save button
         # ═══════════════════════════════════════════════════════════════════
         right = ctk.CTkFrame(main, corner_radius=8)
-        right.grid(row=0, column=1, sticky="nsew", padx=(4, 0), pady=0)
+        right.grid(row=0, column=2, sticky="nsew", padx=(4, 0), pady=0)
         right.rowconfigure(0, weight=1)
         right.columnconfigure(0, weight=1)
 
@@ -1039,65 +899,91 @@ class PureXSApp(ctk.CTk):
             justify="center",
         )
 
-        # ── Image info + save ────────────────────────────────────────────
-        img_bar = ctk.CTkFrame(right, fg_color="transparent", height=36)
-        img_bar.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 8))
+        # ── Post-display toolbar ─────────────────────────────────────────
+        self._toolbar_frame = ctk.CTkFrame(right, fg_color="#111827", corner_radius=8)
+        self._toolbar_frame.grid(row=1, column=0, sticky="ew", padx=8, pady=(2, 4))
+
+        # Row 1: Image info + brightness/contrast sliders
+        toolbar_top = ctk.CTkFrame(self._toolbar_frame, fg_color="transparent")
+        toolbar_top.pack(fill="x", padx=8, pady=(6, 2))
 
         self._img_info_label = ctk.CTkLabel(
-            img_bar,
-            text="",
-            font=ctk.CTkFont(size=11),
-            text_color="#9E9E9E",
+            toolbar_top, text="No image",
+            font=ctk.CTkFont(size=10), text_color="#9E9E9E",
         )
         self._img_info_label.pack(side="left")
 
-        self._save_btn = ctk.CTkButton(
-            img_bar,
-            text="Save Image (PNG)",
-            width=130,
-            height=30,
-            fg_color="#1565C0",
-            hover_color="#1976D2",
-            command=self._on_save_image,
-            state="disabled",
+        # Contrast slider
+        ctk.CTkLabel(toolbar_top, text="Contrast", font=ctk.CTkFont(size=9),
+                     text_color="#78909C").pack(side="right", padx=(8, 2))
+        self._contrast_var = tk.DoubleVar(value=1.0)
+        self._contrast_slider = ctk.CTkSlider(
+            toolbar_top, from_=0.3, to=3.0, variable=self._contrast_var,
+            width=100, height=14, command=self._on_adjust_display,
         )
-        self._save_btn.pack(side="right", padx=4)
+        self._contrast_slider.pack(side="right")
+        self._contrast_slider.configure(state="disabled")
 
-        self._save_raw_btn = ctk.CTkButton(
-            img_bar,
-            text="Save Raw",
-            width=90,
-            height=30,
-            fg_color="#37474F",
-            hover_color="#455A64",
-            command=self._on_save_raw,
-            state="disabled",
+        # Brightness slider
+        ctk.CTkLabel(toolbar_top, text="Brightness", font=ctk.CTkFont(size=9),
+                     text_color="#78909C").pack(side="right", padx=(8, 2))
+        self._brightness_var = tk.DoubleVar(value=0.0)
+        self._brightness_slider = ctk.CTkSlider(
+            toolbar_top, from_=-80, to=80, variable=self._brightness_var,
+            width=100, height=14, command=self._on_adjust_display,
         )
-        self._save_raw_btn.pack(side="right", padx=4)
+        self._brightness_slider.pack(side="right")
+        self._brightness_slider.configure(state="disabled")
+
+        # Row 2: Action buttons
+        toolbar_btns = ctk.CTkFrame(self._toolbar_frame, fg_color="transparent")
+        toolbar_btns.pack(fill="x", padx=8, pady=(2, 6))
+
+        self._save_btn = ctk.CTkButton(
+            toolbar_btns, text="Save PNG", width=90, height=28,
+            font=ctk.CTkFont(size=10),
+            fg_color="#1565C0", hover_color="#1976D2",
+            command=self._on_save_image, state="disabled",
+        )
+        self._save_btn.pack(side="left", padx=(0, 4))
+
+        # Hidden ref to avoid crashes on existing .configure() calls
+        self._save_raw_btn = ctk.CTkButton(toolbar_btns, text="", width=0, height=0)
+
 
         self._open_dcm_btn = ctk.CTkButton(
-            img_bar,
-            text="\U0001F4C2 Open DICOM",
-            width=110,
-            height=30,
-            fg_color="#37474F",
-            hover_color="#455A64",
-            command=self._on_open_dicom_folder,
-            state="disabled",
+            toolbar_btns, text="DICOM Folder", width=100, height=28,
+            font=ctk.CTkFont(size=10),
+            fg_color="#37474F", hover_color="#455A64",
+            command=self._on_open_dicom_folder, state="disabled",
         )
-        self._open_dcm_btn.pack(side="right", padx=4)
+        self._open_dcm_btn.pack(side="left", padx=(0, 4))
 
         self._view_dcm_btn = ctk.CTkButton(
-            img_bar,
-            text="\U0001F52C View DICOM",
-            width=110,
-            height=30,
-            fg_color="#6A1B9A",
-            hover_color="#7B1FA2",
-            command=self._on_view_dicom,
-            state="disabled",
+            toolbar_btns, text="View DICOM", width=90, height=28,
+            font=ctk.CTkFont(size=10),
+            fg_color="#6A1B9A", hover_color="#7B1FA2",
+            command=self._on_view_dicom, state="disabled",
         )
-        self._view_dcm_btn.pack(side="right", padx=4)
+        self._view_dcm_btn.pack(side="left", padx=(0, 4))
+
+        # Reset adjustments button
+        self._reset_adj_btn = ctk.CTkButton(
+            toolbar_btns, text="Reset", width=60, height=28,
+            font=ctk.CTkFont(size=10),
+            fg_color="#37474F", hover_color="#455A64",
+            command=self._on_reset_adjustments, state="disabled",
+        )
+        self._reset_adj_btn.pack(side="right")
+
+        # New Patient button (visible after scan complete)
+        self._new_patient_btn = ctk.CTkButton(
+            toolbar_btns, text="New Patient", width=100, height=28,
+            font=ctk.CTkFont(size=10, weight="bold"),
+            fg_color="#1B5E20", hover_color="#2E7D32",
+            command=self._on_new_patient, state="disabled",
+        )
+        self._new_patient_btn.pack(side="right", padx=(0, 8))
 
     def _build_status_bar(self) -> None:
         """Bottom status bar with animated HB heart, status, and session info."""
@@ -1193,23 +1079,35 @@ class PureXSApp(ctk.CTk):
     # ║  Canvas Helpers
     # ╚════════════════════════════════════════════════════════════════════════
 
-    def _on_canvas_resize(self, event: tk.Event) -> None:
-        """Re-center placeholder text on resize."""
-        self._canvas.coords(
-            self._canvas_text_id, event.width // 2, event.height // 2
-        )
-        # Re-render image if we have one
-        if self._photo_image is not None:
-            self._render_current_image()
+    _resize_debounce_id: str | None = None
 
-    def _render_current_image(self) -> None:
-        """Re-render the last decoded image to fit the canvas."""
-        if not self._last_raw_image:
-            return
+    def _on_canvas_resize(self, event: tk.Event) -> None:
+        """Debounced resize — re-render image after 150ms of no resize events."""
+        # Move placeholder text if it still exists
         try:
-            self._display_image_bytes(self._last_raw_image, refit=True)
-        except Exception:
-            pass
+            self._canvas.coords(
+                self._canvas_text_id, event.width // 2, event.height // 2
+            )
+        except tk.TclError:
+            pass  # text was deleted (image is displayed)
+
+        # Debounce: cancel pending re-render, schedule new one
+        if self._resize_debounce_id is not None:
+            self.after_cancel(self._resize_debounce_id)
+        self._resize_debounce_id = self.after(
+            150, self._rerender_on_resize
+        )
+
+    def _rerender_on_resize(self) -> None:
+        """Re-render stored image at new canvas size."""
+        self._resize_debounce_id = None
+        if self._last_pil_image is not None:
+            self._display_pil_image(self._last_pil_image)
+        elif self._last_raw_image:
+            try:
+                self._display_image_bytes(self._last_raw_image, refit=True)
+            except Exception:
+                pass
 
     # ╔════════════════════════════════════════════════════════════════════════
     # ║  API Health Check
@@ -1261,7 +1159,7 @@ class PureXSApp(ctk.CTk):
 
     def _on_scan(self) -> None:
         """Trigger a UDP discovery scan in a background thread."""
-        self._scan_btn.configure(state="disabled")
+        pass  # scan btn removed
         self._log("Scanning for P2K devices...", "info")
         self._progress.start()
 
@@ -1279,7 +1177,7 @@ class PureXSApp(ctk.CTk):
     ) -> None:
         self._progress.stop()
         self._progress.set(0)
-        self._scan_btn.configure(state="normal")
+        pass  # scan btn removed
 
         if error:
             self._log(f"Scan failed: {error}", "error")
@@ -1304,7 +1202,7 @@ class PureXSApp(ctk.CTk):
                 "info",
             )
 
-        self._mac_combo.configure(values=macs)
+        pass  # mac combo removed
         if macs:
             self._mac_var.set(macs[0])
         Toast(
@@ -1331,7 +1229,7 @@ class PureXSApp(ctk.CTk):
             Toast(self, "Select a device first (press Scan)", level="warning")
             return
 
-        self._connect_btn.configure(state="disabled")
+        pass  # connect btn removed
         self._log(f"Connecting to {mac}...", "info")
         self._progress.start()
         self._set_status("CONNECTING", "#FFA726")
@@ -1352,7 +1250,7 @@ class PureXSApp(ctk.CTk):
         self._progress.set(0)
 
         if error:
-            self._connect_btn.configure(state="normal")
+            pass  # connect btn removed
             self._set_status("ERROR", "#F44336")
             self._log(f"Connect failed: {error}", "error")
             Toast(self, f"Connection failed: {error}", level="error")
@@ -1369,8 +1267,8 @@ class PureXSApp(ctk.CTk):
             text_color="#B0BEC5",
         )
 
-        self._connect_btn.configure(state="disabled")
-        self._disconnect_btn.configure(state="normal")
+        pass  # connect btn removed
+        pass  # disconnect btn removed
         self._session_label.configure(text=f"MAC: {mac}")
         self._update_expose_eligibility()
 
@@ -1404,8 +1302,8 @@ class PureXSApp(ctk.CTk):
         self._device_info_label.configure(
             text="No device connected", text_color="#757575"
         )
-        self._connect_btn.configure(state="normal")
-        self._disconnect_btn.configure(state="disabled")
+        pass  # connect btn removed
+        pass  # disconnect btn removed
         self._hb_label.configure(text="HB: --", text_color="#616161")
         self._heart_off_state()
         self._session_label.configure(text="")
@@ -2051,30 +1949,24 @@ class PureXSApp(ctk.CTk):
         self._device_ready = True
         self._update_expose_eligibility()
         self._hb_monitor_btn.configure(
-            text="\u2764 Stop HB",
+            text="Disconnect",
             fg_color="#880E4F",
             hover_color="#AD1457",
             state="normal",
         )
         # Re-evaluate expose button (needs HB active + patient set)
         self._update_expose_eligibility()
-        conn_info = f" ({host}:{port})" if host else ""
-        self._set_status(
-            f"CONNECTED{conn_info} \u2014 set patient, position gantry (R on keypad)",
-            "#2196F3",
-            phase="Press R on unit keypad to move gantry to patient position",
-        )
+        self._set_status("Connected", "#4CAF50")
         self._device_info_label.configure(
             text=f"Sirona @ {host}:{port}" if host else "Direct TCP connected",
             text_color="#81D4FA",
         )
         self._log("Direct TCP: HB monitor active (0.9s interval)", "info")
-        Toast(self, "HB active \u2014 press R on keypad to position gantry",
-              level="success", duration_ms=4000)
+        Toast(self, "Connected", level="success", duration_ms=2000)
 
     def _on_direct_connect_failed(self, exc: Exception) -> None:
         self._hb_monitor_btn.configure(
-            text="\u2764 Monitor HB", state="normal"
+            text="Connect to Device", state="normal"
         )
         self._log(f"Direct TCP connect failed: {exc}", "error")
         Toast(self, f"Direct connect failed: {exc}", level="error")
@@ -2087,7 +1979,7 @@ class PureXSApp(ctk.CTk):
         self._device_ready = False
         self._exposing = False
         self._hb_monitor_btn.configure(
-            text="\u2764 Monitor HB",
+            text="Connect to Device",
             fg_color="#4A148C",
             hover_color="#6A1B9A",
             state="normal",
@@ -2373,6 +2265,9 @@ class PureXSApp(ctk.CTk):
         self._set_status("\u2622 EXPOSING \u2014 kV ramping", "#FF6F00",
                          phase="Phase 1: pre-exposure \u2014 kV ramp")
         self._progress.start()
+        # Show kV gauge and scanline preview during expose
+        self._kv_frame.pack(fill="x", padx=8, pady=4, before=self._log_frame)
+        self._scan_preview_frame.pack(fill="both", expand=True, padx=8, pady=4, before=self._log_frame)
         self._scanline_canvas.delete("all")
         self._scanline_count_label.configure(text="0 lines")
         self._save_pano_btn.configure(state="disabled")
@@ -2730,32 +2625,83 @@ class PureXSApp(ctk.CTk):
 
     def _stitch_panoramic(self) -> None:
         """Auto-stitch scanlines into a full panoramic and display it."""
-        if not HAS_HB_DECODER:
+        if not HAS_HB_DECODER or not self._expose_scanlines:
             return
 
-        img = reconstruct_image(self._expose_scanlines)
+        # Show loading state on canvas
+        self._canvas.delete("all")
+        cw = self._canvas.winfo_width()
+        ch = self._canvas.winfo_height()
+        if cw < 10:
+            cw, ch = 800, 500
+        self._canvas.create_text(
+            cw // 2, ch // 2 - 20,
+            text="Processing X-ray...",
+            fill="#4FC3F7", font=("Helvetica", 18),
+        )
+        self._canvas.create_text(
+            cw // 2, ch // 2 + 15,
+            text=f"{len(self._expose_scanlines)} columns captured",
+            fill="#546E7A", font=("Helvetica", 12),
+        )
+        self._progress.configure(mode="indeterminate")
+        self._progress.start()
+
+        # Run heavy reconstruct on background thread
+        scanlines = list(self._expose_scanlines)
+        repair_mask = getattr(self._sirona_client, '_repair_mask', None) if self._sirona_client else None
+
+        def _do():
+            try:
+                img = reconstruct_image(scanlines, repair_mask=repair_mask)
+                self.after(0, self._on_stitch_done, img, None)
+            except Exception as exc:
+                self.after(0, self._on_stitch_done, None, exc)
+
+        threading.Thread(target=_do, name="stitch", daemon=True).start()
+
+    def _on_stitch_done(self, img: "Image.Image | None", error: "Exception | None") -> None:
+        """Callback after background reconstruct_image completes."""
+        self._progress.stop()
+        self._progress.set(0)
+
+        if error:
+            self._log(f"Panoramic stitch failed: {error}", "error")
+            self._canvas.delete("all")
+            cw = self._canvas.winfo_width()
+            ch = self._canvas.winfo_height()
+            self._canvas.create_text(
+                cw // 2, ch // 2,
+                text=f"Processing failed\n{error}",
+                fill="#EF5350", font=("Helvetica", 14), justify="center",
+            )
+            Toast(self, f"Image processing failed: {error}", level="error")
+            return
+
         if img is None:
             self._log("Panoramic stitch failed — no valid scanlines", "warning")
             return
 
-        self._log(
-            f"Panoramic stitched: {img.width}x{img.height}",
-            "info",
-        )
-
-        # Display in the main image canvas (right panel)
+        self._log(f"Panoramic stitched: {img.width}x{img.height}", "info")
         self._display_pil_image(img)
         self._save_pano_btn.configure(state="normal")
+        self._enable_post_toolbar()
+        self._new_patient_btn.configure(state="normal")
+        self._set_status(
+            f"Scan complete — {img.width}x{img.height}",
+            "#4CAF50",
+        )
 
     def _display_pil_image(self, img: Image.Image) -> None:
         """Display a PIL Image on the main canvas, scaled to fill."""
+        self._last_pil_image = img  # store for resize re-render
+
         cw = self._canvas.winfo_width()
         ch = self._canvas.winfo_height()
         if cw < 10 or ch < 10:
-            cw, ch = 600, 400
+            cw, ch = 800, 500
 
         img_w, img_h = img.size
-        # Scale to FILL the canvas (no 1.0 cap — allow upscaling)
         scale = min(cw / img_w, ch / img_h)
         new_w = max(int(img_w * scale), 1)
         new_h = max(int(img_h * scale), 1)
@@ -2768,11 +2714,86 @@ class PureXSApp(ctk.CTk):
         )
         self._img_info_label.configure(
             text=(
-                f"{img_w}\u00D7{img_h}  L  |  "
-                f"{len(self._expose_scanlines)} scanlines  |  "
+                f"{img_w}\u00D7{img_h}  |  "
+                f"{len(self._expose_scanlines)} columns  |  "
                 f"Exposure #{self._expose_count}"
             )
         )
+
+    # ── Post-display toolbar logic ──────────────────────────────────────
+
+    def _enable_post_toolbar(self) -> None:
+        """Enable brightness/contrast sliders and save buttons after image display."""
+        self._brightness_slider.configure(state="normal")
+        self._contrast_slider.configure(state="normal")
+        self._reset_adj_btn.configure(state="normal")
+        self._save_btn.configure(state="normal")
+        self._save_raw_btn.configure(state="normal")
+
+    def _disable_post_toolbar(self) -> None:
+        """Disable all post-display toolbar controls."""
+        self._brightness_slider.configure(state="disabled")
+        self._contrast_slider.configure(state="disabled")
+        self._reset_adj_btn.configure(state="disabled")
+        self._save_btn.configure(state="disabled")
+        self._save_raw_btn.configure(state="disabled")
+        self._open_dcm_btn.configure(state="disabled")
+        self._view_dcm_btn.configure(state="disabled")
+
+    _adjust_debounce_id: str | None = None
+
+    def _on_adjust_display(self, _value=None) -> None:
+        """Debounced brightness/contrast adjustment (display-only, non-destructive)."""
+        if self._adjust_debounce_id is not None:
+            self.after_cancel(self._adjust_debounce_id)
+        self._adjust_debounce_id = self.after(50, self._apply_adjustments)
+
+    def _apply_adjustments(self) -> None:
+        """Apply brightness/contrast to the stored PIL image and re-display."""
+        self._adjust_debounce_id = None
+        if self._last_pil_image is None:
+            return
+
+        from PIL import ImageEnhance
+
+        brightness = self._brightness_var.get()  # -80 to +80
+        contrast = self._contrast_var.get()       # 0.3 to 3.0
+
+        img = self._last_pil_image
+        # Apply contrast
+        if abs(contrast - 1.0) > 0.01:
+            img = ImageEnhance.Contrast(img).enhance(contrast)
+        # Apply brightness as offset
+        if abs(brightness) > 1:
+            import numpy as _np
+            arr = _np.array(img, dtype=_np.int16)
+            arr = _np.clip(arr + int(brightness), 0, 255).astype(_np.uint8)
+            img = Image.fromarray(arr)
+
+        # Re-render adjusted image (don't overwrite _last_pil_image)
+        cw = self._canvas.winfo_width()
+        ch = self._canvas.winfo_height()
+        if cw < 10 or ch < 10:
+            cw, ch = 800, 500
+
+        img_w, img_h = img.size
+        scale = min(cw / img_w, ch / img_h)
+        new_w = max(int(img_w * scale), 1)
+        new_h = max(int(img_h * scale), 1)
+        display_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+        self._photo_image = ImageTk.PhotoImage(display_img)
+        self._canvas.delete("all")
+        self._canvas.create_image(
+            cw // 2, ch // 2, image=self._photo_image, anchor="center",
+        )
+
+    def _on_reset_adjustments(self) -> None:
+        """Reset brightness/contrast to defaults."""
+        self._brightness_var.set(0.0)
+        self._contrast_var.set(1.0)
+        if self._last_pil_image is not None:
+            self._display_pil_image(self._last_pil_image)
 
     def _on_save_panoramic(self) -> None:
         """Save the stitched panoramic image."""
@@ -2966,9 +2987,19 @@ class PureXSApp(ctk.CTk):
     # ║  Patient Workflow
     # ╚════════════════════════════════════════════════════════════════════════
 
-    def _validate_dob(self, dob_str: str) -> str | None:
-        """Validate MM/DD/YYYY date. Returns error string or None if valid."""
+    @staticmethod
+    def _normalize_dob(dob_str: str) -> str:
+        """Convert YYYY-MM-DD to MM/DD/YYYY if needed."""
         dob_str = dob_str.strip()
+        try:
+            dob = datetime.strptime(dob_str, "%Y-%m-%d").date()
+            return dob.strftime("%m/%d/%Y")
+        except ValueError:
+            return dob_str
+
+    def _validate_dob(self, dob_str: str) -> str | None:
+        """Validate date (accepts MM/DD/YYYY or YYYY-MM-DD). Returns error or None."""
+        dob_str = self._normalize_dob(dob_str.strip())
         if not dob_str:
             return "DOB is required"
         try:
@@ -3057,11 +3088,46 @@ class PureXSApp(ctk.CTk):
         self._patient_banner.configure(text="")
         self._selected_purechart = None
         self._hide_profile_card()
+        self._show_dock()
 
         # Disable expose buttons
         self._update_expose_eligibility()
 
         self._log("Patient cleared", "info")
+
+    def _on_new_patient(self) -> None:
+        """One-click reset: clear patient, clear canvas, re-show dock."""
+        if self._exposing:
+            Toast(self, "Cannot switch patient during expose", level="warning")
+            return
+
+        # Clear patient
+        self._on_clear_patient()
+
+        # Reset canvas to placeholder
+        self._last_pil_image = None
+        self._canvas.delete("all")
+        cw = self._canvas.winfo_width()
+        ch = self._canvas.winfo_height()
+        self._canvas_text_id = self._canvas.create_text(
+            cw // 2, ch // 2,
+            text="No Image\n\nSelect a patient and press EXPOSE",
+            fill="#3A3A3A", font=("Segoe UI", 16), justify="center",
+        )
+        self._img_info_label.configure(text="No image")
+
+        # Reset toolbar
+        self._disable_post_toolbar()
+        self._new_patient_btn.configure(state="disabled")
+        self._on_reset_adjustments()
+
+        # Reset status
+        if self._direct_connected:
+            self._set_status("Connected", "#4CAF50")
+        else:
+            self._set_status("OFFLINE", "#616161")
+
+        self._log("Ready for new patient", "info")
 
     def _update_expose_eligibility(self) -> None:
         """Enable/disable expose buttons based on HB + patient + device readiness."""
@@ -3112,11 +3178,11 @@ class PureXSApp(ctk.CTk):
                     for p in data[:RECENT_PATIENTS_MAX]:
                         label = f"{p.get('last', '?')}, {p.get('first', '?')} ({p.get('id', '?')})"
                         labels.append(label)
-                    self._recent_combo.configure(values=["(none)"] + labels)
+                    pass  # recent combo removed
                     return
         except Exception as exc:
             log.debug("Failed to load recent patients: %s", exc)
-        self._recent_combo.configure(values=["(none)"])
+        pass  # recent combo removed
 
     def _add_recent_patient(self) -> None:
         """Prepend current patient to recents list (max 10, deduped by ID)."""
@@ -3333,10 +3399,9 @@ class PureXSApp(ctk.CTk):
             self._purechart_debounce_id = None
         query = self._purechart_search_var.get().strip()
         if len(query) < 2:
-            # Too short — reset dropdown
+            # Too short — clear dock
             self._purechart_patients = []
-            self._purechart_combo.configure(values=["(type 2+ characters)"])
-            self._purechart_var.set("(type 2+ characters)")
+            self._clear_avatar_dock()
             self._purechart_status.configure(text="", text_color="#757575")
             return
         # Schedule search after 400ms of no typing
@@ -3372,12 +3437,10 @@ class PureXSApp(ctk.CTk):
     def _purechart_populate_combo(
         self, patients: list, error: Exception | None,
     ) -> None:
-        """Main-thread callback: populate the PureChart results ComboBox."""
+        """Main-thread callback: populate the avatar dock with patient tiles."""
         self._purechart_searching = False
 
         if error is not None:
-            self._purechart_var.set("(unavailable)")
-            self._purechart_combo.configure(values=["(unavailable)"])
             self._purechart_status.configure(
                 text="API unreachable — app continues normally",
                 text_color="#EF5350",
@@ -3387,43 +3450,432 @@ class PureXSApp(ctk.CTk):
 
         self._purechart_patients = patients
         if not patients:
-            self._purechart_var.set("(no results)")
-            self._purechart_combo.configure(values=["(no results)"])
+            self._clear_avatar_dock()
             self._purechart_status.configure(
                 text="0 patients found", text_color="#757575"
             )
             return
 
-        display_names = [p.display_name for p in patients]
-        self._purechart_combo.configure(values=display_names)
-        self._purechart_var.set(display_names[0])
         self._purechart_status.configure(
             text=f"{len(patients)} results",
             text_color="#81C784",
         )
         self._log(f"PureChart: {len(patients)} results", "info")
+        self._build_avatar_dock(patients)
 
-    # PHASE 1
-    def _on_purechart_patient_selected(self, choice: str) -> None:
-        """User picked a patient from the PureChart dropdown — auto-fill fields."""
-        if choice.startswith("("):
-            self._selected_purechart = None
-            self._hide_profile_card()
+    def _clear_avatar_dock(self) -> None:
+        """Remove all avatar tiles from the dock."""
+        for tile in self._avatar_tiles:
+            tile["canvas"].destroy()
+        self._avatar_tiles = []
+        self._avatar_photos = {}
+        self._avatar_raw_bytes = {}
+
+    _DOCK_WIDTH = 90
+    _dock_anim_id: str | None = None
+    _dock_anim_step: int = 0
+
+    def _hide_dock(self) -> None:
+        """Smoothly collapse the patient avatar dock."""
+        if not self._dock_visible:
             return
+        self._dock_visible = False
+        self._dismiss_hover_popup()
+        # Phase 1: fade out content, then Phase 2: slide width
+        self._dock_fade_then_slide(hiding=True)
 
-        # Find matching patient by display_name
-        for p in self._purechart_patients:
-            if p.display_name == choice:
-                self._selected_purechart = p
-                break
+    def _show_dock(self) -> None:
+        """Smoothly expand the patient avatar dock."""
+        if self._dock_visible:
+            return
+        self._dock_visible = True
+        self._dock_frame.configure(width=1)
+        self._main_grid.columnconfigure(0, weight=0, minsize=1)
+        self._dock_frame.grid()
+        # Phase 1: slide width open, then Phase 2: fade in content
+        self._dock_fade_then_slide(hiding=False)
+
+    def _dock_fade_then_slide(self, hiding: bool) -> None:
+        """Two-phase animation: fade content + slide width."""
+        if self._dock_anim_id is not None:
+            self.after_cancel(self._dock_anim_id)
+            self._dock_anim_id = None
+
+        FADE_STEPS = 8
+        FADE_MS = 20
+        SLIDE_STEPS = 16
+        SLIDE_MS = 16
+        step = [0]
+
+        if hiding:
+            FADE_STEPS = 5
+            FADE_MS = 15
+            SLIDE_STEPS = 10
+            SLIDE_MS = 12
+
+            # Phase 1: fade content out
+            def _fade():
+                step[0] += 1
+                t = step[0] / FADE_STEPS
+                t_ease = t * t
+                # Fade dock bg from #0D1117 toward #1A1A2E
+                r = int(13 + (26 - 13) * t_ease)
+                g = int(17 + (26 - 17) * t_ease)
+                b = int(23 + (46 - 23) * t_ease)
+                try:
+                    self._dock_frame.configure(fg_color=f"#{r:02x}{g:02x}{b:02x}")
+                except Exception:
+                    pass
+                # Hide avatar canvases progressively
+                for tile in self._avatar_tiles:
+                    try:
+                        tile["canvas"].configure(bg=f"#{r:02x}{g:02x}{b:02x}")
+                    except Exception:
+                        pass
+                if step[0] < FADE_STEPS:
+                    self._dock_anim_id = self.after(FADE_MS, _fade)
+                else:
+                    step[0] = 0
+                    _slide()
+
+            # Phase 2: slide width closed
+            def _slide():
+                step[0] += 1
+                t = step[0] / SLIDE_STEPS
+                # Ease-in-out: smooth both ends
+                t_ease = t * t * (3 - 2 * t)
+                w = int(self._DOCK_WIDTH * (1 - t_ease))
+                self._main_grid.columnconfigure(0, weight=0, minsize=max(w, 0))
+                if step[0] < SLIDE_STEPS:
+                    self._dock_anim_id = self.after(SLIDE_MS, _slide)
+                else:
+                    self._dock_anim_id = None
+                    self._dock_frame.grid_remove()
+                    self._main_grid.columnconfigure(0, weight=0, minsize=0)
+
+            _fade()
+
         else:
-            self._selected_purechart = None
-            self._hide_profile_card()
+            # Phase 1: slide width open
+            def _slide():
+                step[0] += 1
+                t = step[0] / SLIDE_STEPS
+                t_ease = t * t * (3 - 2 * t)
+                w = int(self._DOCK_WIDTH * t_ease)
+                self._main_grid.columnconfigure(0, weight=0, minsize=max(w, 1))
+                if step[0] < SLIDE_STEPS:
+                    self._dock_anim_id = self.after(SLIDE_MS, _slide)
+                else:
+                    step[0] = 0
+                    _fade_in()
+
+            # Phase 2: fade content in
+            def _fade_in():
+                step[0] += 1
+                t = step[0] / FADE_STEPS
+                t_ease = 1 - (1 - t) ** 2  # ease-out
+                r = int(26 + (13 - 26) * t_ease)
+                g = int(26 + (17 - 26) * t_ease)
+                b = int(46 + (23 - 46) * t_ease)
+                try:
+                    self._dock_frame.configure(fg_color=f"#{r:02x}{g:02x}{b:02x}")
+                except Exception:
+                    pass
+                for tile in self._avatar_tiles:
+                    try:
+                        tile["canvas"].configure(bg=f"#{r:02x}{g:02x}{b:02x}")
+                    except Exception:
+                        pass
+                if step[0] < FADE_STEPS:
+                    self._dock_anim_id = self.after(FADE_MS, _fade_in)
+                else:
+                    self._dock_anim_id = None
+                    self._dock_frame.configure(fg_color="#0D1117")
+                    for tile in self._avatar_tiles:
+                        try:
+                            tile["canvas"].configure(bg="#0D1117")
+                        except Exception:
+                            pass
+
+            _slide()
+
+    def _on_change_patient(self) -> None:
+        """Re-show the dock to pick a different patient."""
+        self._selected_purechart = None
+        self._hide_profile_card()
+        self._show_dock()
+
+    # ── Avatar hover magnify + tooltip ────────────────────────────────
+
+    _hover_popup: tk.Toplevel | None = None
+    _hover_anim_id: str | None = None
+    _hover_canvas: tk.Canvas | None = None
+    _hover_patient: object | None = None
+    _hover_size: int = 60
+    _TILE_SIZE = 60
+    _MAGNIFIED = 76
+    _ANIM_STEPS = 6
+    _ANIM_MS = 18
+
+    def _on_avatar_enter(self, event, canvas: tk.Canvas, pt) -> None:
+        """Start smooth magnify animation and show detail popup."""
+        # Cancel any running animation
+        if self._hover_anim_id is not None:
+            self.after_cancel(self._hover_anim_id)
+            self._hover_anim_id = None
+
+        self._hover_canvas = canvas
+        self._hover_patient = pt
+
+        # Animate from current size toward MAGNIFIED
+        self._animate_avatar(canvas, pt, self._hover_size, self._MAGNIFIED, grow=True)
+
+        # Show detail popup immediately
+        self._show_hover_popup(canvas, pt)
+
+    def _on_avatar_leave(self, event, canvas: tk.Canvas) -> None:
+        """Start smooth shrink animation and dismiss popup."""
+        if self._hover_anim_id is not None:
+            self.after_cancel(self._hover_anim_id)
+            self._hover_anim_id = None
+
+        pt = None
+        for tile in self._avatar_tiles:
+            if tile["canvas"] is canvas:
+                pt = tile["patient"]
+                break
+
+        self._hover_canvas = None
+        self._hover_patient = None
+
+        # Animate from current size back to TILE_SIZE
+        self._animate_avatar(canvas, pt, self._hover_size, self._TILE_SIZE, grow=False)
+
+        self._dismiss_hover_popup()
+
+    def _animate_avatar(self, canvas, pt, from_size, to_size, grow: bool) -> None:
+        """Animate avatar size in steps."""
+        step = 0
+        total = self._ANIM_STEPS
+
+        def _step():
+            nonlocal step
+            step += 1
+            t = step / total
+            # Ease-out cubic
+            t_ease = 1 - (1 - t) ** 3
+            size = int(from_size + (to_size - from_size) * t_ease)
+            self._hover_size = size
+
+            self._redraw_avatar(canvas, pt, size, highlight=grow)
+
+            if step < total:
+                self._hover_anim_id = self.after(self._ANIM_MS, _step)
+            else:
+                self._hover_anim_id = None
+                self._hover_size = to_size
+
+        _step()
+
+    def _redraw_avatar(self, canvas, pt, size, highlight=False):
+        """Redraw an avatar at the given size with circular crop + glow."""
+        bg_color = "#1A2740" if highlight else "#0D1117"
+        canvas.configure(width=size, height=size, bg=bg_color)
+        canvas.delete("all")
+
+        inner = size - 6  # image area inside padding
+        raw_bytes = self._avatar_raw_bytes.get(pt.id) if pt else None
+
+        if pt and raw_bytes:
+            # Render circular-cropped photo at current size
+            from PIL import ImageDraw
+            img = Image.open(io.BytesIO(raw_bytes))
+            img = img.resize((inner, inner), Image.LANCZOS)
+            mask = Image.new("L", (inner, inner), 0)
+            ImageDraw.Draw(mask).ellipse((0, 0, inner - 1, inner - 1), fill=255)
+            bg_img = Image.new("RGBA", (inner, inner),
+                               tuple(int(bg_color[i:i+2], 16) for i in (1, 3, 5)) + (255,))
+            img = img.convert("RGBA")
+            bg_img.paste(img, (0, 0), mask)
+            photo = ImageTk.PhotoImage(bg_img)
+            # Store keyed by (patient_id, size) to prevent GC
+            self._avatar_photos[(pt.id, size)] = photo
+            canvas.create_image(size // 2, size // 2,
+                                image=photo, anchor="center")
+        else:
+            # Initials fallback
+            canvas.create_oval(3, 3, size - 3, size - 3,
+                               fill="#0F3460", outline="#2A2A4A", width=2)
+            if pt:
+                initials = ""
+                if pt.first_name:
+                    initials += pt.first_name[0].upper()
+                if pt.last_name:
+                    initials += pt.last_name[0].upper()
+                font_size = max(10, int(size * 0.28))
+                canvas.create_text(size // 2, size // 2,
+                                   text=initials or "?", fill="white",
+                                   font=("Helvetica", font_size, "bold"))
+
+        # Cyan glow ring on top (always visible over photo)
+        outline_color = "#4FC3F7" if highlight else "#2A2A4A"
+        outline_w = 3 if highlight else 2
+        canvas.create_oval(3, 3, size - 3, size - 3,
+                           fill="", outline=outline_color, width=outline_w)
+
+    def _show_hover_popup(self, canvas, pt) -> None:
+        """Show patient detail popup to the right of the dock."""
+        self._dismiss_hover_popup()
+
+        popup = tk.Toplevel(self)
+        popup.overrideredirect(True)
+        popup.configure(bg="#4FC3F7")
+        popup.attributes("-topmost", True)
+        # Start transparent, fade in
+        popup.attributes("-alpha", 0.0)
+
+        dock_x = self._dock_frame.winfo_rootx() + self._dock_frame.winfo_width() + 6
+        avatar_y = canvas.winfo_rooty() - 10
+        popup.geometry(f"+{dock_x}+{avatar_y}")
+
+        # Outer border (1px cyan)
+        inner = tk.Frame(popup, bg="#1E2A44", padx=14, pady=10)
+        inner.pack(padx=1, pady=1)
+
+        name = f"{pt.first_name} {pt.last_name}"
+        tk.Label(inner, text=name, fg="white", bg="#1E2A44",
+                 font=("Helvetica", 13, "bold")).pack(anchor="w")
+
+        if pt.medical_record_number:
+            tk.Label(inner, text=pt.medical_record_number,
+                     fg="#4FC3F7", bg="#1E2A44",
+                     font=("Consolas", 10)).pack(anchor="w", pady=(2, 0))
+
+        details = []
+        if pt.dob:
+            details.append(f"DOB  {pt.dob}")
+        if pt.phone:
+            details.append(f"Tel  {pt.phone}")
+        for d in details:
+            tk.Label(inner, text=d, fg="#90A4AE", bg="#1E2A44",
+                     font=("Helvetica", 10)).pack(anchor="w")
+
+        self._hover_popup = popup
+
+        # Fade in over 120ms
+        self._fade_popup(popup, 0.0, 1.0, steps=6)
+
+    def _fade_popup(self, popup, from_a, to_a, steps, step=0):
+        """Animate popup alpha."""
+        try:
+            if not popup.winfo_exists():
+                return
+        except Exception:
             return
+        step += 1
+        t = step / steps
+        alpha = from_a + (to_a - from_a) * t
+        try:
+            popup.attributes("-alpha", alpha)
+        except Exception:
+            return
+        if step < steps:
+            self.after(20, self._fade_popup, popup, from_a, to_a, steps, step)
 
-        pt = self._selected_purechart
+    def _dismiss_hover_popup(self) -> None:
+        if self._hover_popup is not None:
+            try:
+                self._hover_popup.destroy()
+            except Exception:
+                pass
+            self._hover_popup = None
 
-        # Auto-fill the existing patient fields
+    def _build_avatar_dock(self, patients: list) -> None:
+        """Build clickable avatar tiles in the vertical dock (single column)."""
+        self._clear_avatar_dock()
+        TILE_SIZE = 60
+
+        for idx, pt in enumerate(patients):
+            # Single column — each tile is one row
+            canvas = tk.Canvas(
+                self._avatar_dock_frame, width=TILE_SIZE, height=TILE_SIZE,
+                bg="#0D1117", highlightthickness=0, cursor="hand2",
+            )
+            canvas.pack(padx=4, pady=3)
+
+            # Draw initials circle
+            initials = ""
+            if pt.first_name:
+                initials += pt.first_name[0].upper()
+            if pt.last_name:
+                initials += pt.last_name[0].upper()
+            initials = initials or "?"
+
+            canvas.create_oval(3, 3, TILE_SIZE - 3, TILE_SIZE - 3,
+                               fill="#0F3460", outline="#2A2A4A", width=2)
+            canvas.create_text(TILE_SIZE // 2, TILE_SIZE // 2,
+                               text=initials, fill="white",
+                               font=("Helvetica", 14, "bold"))
+
+            # Click binding
+            canvas.bind("<Button-1>", lambda e, p=pt: self._on_avatar_clicked(p))
+
+            # Hover: magnify + show tooltip
+            canvas.bind("<Enter>", lambda e, c=canvas, p=pt: self._on_avatar_enter(e, c, p))
+            canvas.bind("<Leave>", lambda e, c=canvas, p=pt: self._on_avatar_leave(e, c))
+
+            # Forward mousewheel to the scrollable frame
+            def _on_mousewheel(e):
+                self._avatar_dock_frame._parent_canvas.yview_scroll(
+                    int(-1 * (e.delta / 120)), "units"
+                )
+            canvas.bind("<MouseWheel>", _on_mousewheel)
+
+            self._avatar_tiles.append({
+                "canvas": canvas,
+                "patient": pt,
+            })
+
+            # Download profile picture in background
+            if pt.profile_picture_url:
+                threading.Thread(
+                    target=self._download_avatar_image,
+                    args=(pt.profile_picture_url, pt.id, idx),
+                    daemon=True,
+                ).start()
+
+    def _download_avatar_image(self, url: str, patient_id: str, tile_idx: int) -> None:
+        """Background thread: download profile pic for avatar dock tile."""
+        try:
+            # Use the PureChart loader's session (has auth headers)
+            if self._purechart_loader:
+                resp = self._purechart_loader._session.get(url, timeout=10)
+            else:
+                resp = requests.get(url, timeout=10)
+            if resp.status_code == 200:
+                self.after(0, self._set_avatar_tile_image, resp.content, patient_id, tile_idx)
+        except Exception:
+            pass
+
+    def _set_avatar_tile_image(self, image_bytes: bytes, patient_id: str, tile_idx: int) -> None:
+        """Main-thread: set a dock tile's avatar to the downloaded image."""
+        if tile_idx >= len(self._avatar_tiles):
+            return
+        tile = self._avatar_tiles[tile_idx]
+        if tile["patient"].id != patient_id:
+            return
+        self._avatar_raw_bytes[patient_id] = image_bytes
+        pt = tile["patient"]
+        self._redraw_avatar(tile["canvas"], pt, self._TILE_SIZE, highlight=False)
+
+    def _on_avatar_clicked(self, pt: "PureChartPatient") -> None:
+        """User clicked an avatar tile — select patient, hide dock, show card."""
+        self._selected_purechart = pt
+
+        # Hide the dock
+        self._hide_dock()
+
+        # Auto-fill the patient fields
         for w in (self._pt_first, self._pt_last, self._pt_dob, self._pt_id):
             w.configure(state="normal")
 
@@ -3434,7 +3886,7 @@ class PureXSApp(ctk.CTk):
         self._pt_last.insert(0, pt.last_name)
 
         self._pt_dob.delete(0, "end")
-        self._pt_dob.insert(0, pt.dob)
+        self._pt_dob.insert(0, self._normalize_dob(pt.dob))
 
         self._pt_id.delete(0, "end")
         self._pt_id.insert(0, pt.id)
@@ -3443,17 +3895,13 @@ class PureXSApp(ctk.CTk):
         self._pt_status_label.configure(
             text="Click Set Patient to confirm", text_color="#FFA726"
         )
-        self._purechart_status.configure(
-            text=f"Selected: {pt.first_name} {pt.last_name} | DOB: {pt.dob} | MRN: {pt.medical_record_number}",
-            text_color="#4FC3F7",
-        )
         self._log(
             f"PureChart patient selected: {pt.first_name} {pt.last_name} "
             f"(ID: {pt.id}, MRN: {pt.medical_record_number})",
             "info",
         )
 
-        # Show the profile card with patient info + avatar
+        # Show the profile card
         self._show_profile_card(pt)
 
     # ── Profile card helpers ──────────────────────────────────────────────
@@ -3480,9 +3928,9 @@ class PureXSApp(ctk.CTk):
         )
         self._profile_photo = None
 
-        # Show the card (positioned after the PureChart search row)
+        # Show the card inside the patient frame
         if not self._profile_card_visible:
-            self._profile_card.pack(fill="x", padx=12, pady=(4, 4), after=self._purechart_row)
+            self._profile_card.pack(fill="x", padx=12, pady=(4, 4))
             self._profile_card_visible = True
 
         # Download profile picture in background if URL available
@@ -3503,7 +3951,10 @@ class PureXSApp(ctk.CTk):
     def _download_profile_image(self, url: str, patient_id: str) -> None:
         """Background thread: download profile picture and update avatar."""
         try:
-            resp = requests.get(url, timeout=10)
+            if self._purechart_loader:
+                resp = self._purechart_loader._session.get(url, timeout=10)
+            else:
+                resp = requests.get(url, timeout=10)
             if resp.status_code != 200:
                 return
             self.after(0, self._set_profile_image, resp.content, patient_id)
