@@ -2800,9 +2800,122 @@ def reconstruct_image(
         img_8bit[:top_edge, :] = 0
         log.info("Top collimator fade: row %d (VFADE=%d)", top_edge, VFADE)
 
-    # DEBUG: save after collimator edges (before crop)
+    # DEBUG: save after collimator edges (before corner mask)
     Image.fromarray(img_8bit).save("debug_stage10_collimator.png")
     log.info("DEBUG saved: debug_stage10_collimator.png")
+
+    # ── Bottom/top brightness spike suppression ──────────────────────
+    #   The detector bottom (and sometimes top) rows exhibit a brightness
+    #   spike from scatter radiation and detector edge effects.  This
+    #   creates bright bands, worst in the corners where L/R fade
+    #   doesn't reach.  The global top/bottom fade misses it because
+    #   it looks for signal DROP — these rows have MORE signal.
+    #
+    #   Approach: compare each row's per-column brightness to a
+    #   "reference" band (the interior rows 30-60px above/below).
+    #   Where a row is significantly brighter than its reference,
+    #   clamp it down.
+    _img_fc = img_8bit.astype(np.float32)
+
+    # Measure before
+    _bl_before = _img_fc[height - 180:, :150]
+    _br_before = _img_fc[height - 180:, -150:]
+    _bl_pct_before = float(np.sum(_bl_before > 240) / max(_bl_before.size, 1) * 100)
+    _br_pct_before = float(np.sum(_br_before > 240) / max(_br_before.size, 1) * 100)
+
+    # --- Bottom spike suppression ---
+    # Reference: rows at 70%-85% height (interior, above any bottom spike)
+    _ref_lo = int(height * 0.70)
+    _ref_hi = int(height * 0.85)
+    _ref_band_bot = np.mean(_img_fc[_ref_lo:_ref_hi, :], axis=0)  # per-col reference
+    _ref_band_bot = np.maximum(_ref_band_bot, 1.0)
+    # Smooth the reference to avoid amplifying column noise
+    _ref_band_bot = gaussian_filter1d(_ref_band_bot.astype(np.float64),
+                                      sigma=30).astype(np.float32)
+
+    # Scan from bottom: for each row in the bottom 15%, check per-column
+    # brightness ratio against the reference band.
+    SPIKE_ZONE_BOT = int(height * 0.15)  # bottom 15% of image
+    SPIKE_THRESH = 1.20   # 20% brighter than reference = spike
+    SPIKE_FADE = 25       # fade width for the suppression
+
+    _spike_start_bot = height  # will be lowered to first spiking row
+    for r in range(height - 1, height - SPIKE_ZONE_BOT - 1, -1):
+        row_data = _img_fc[r, :]
+        # Ratio vs reference for columns with actual signal
+        _signal_cols = _ref_band_bot > 10
+        if not np.any(_signal_cols):
+            continue
+        ratio = np.median(row_data[_signal_cols] / _ref_band_bot[_signal_cols])
+        if ratio > SPIKE_THRESH:
+            _spike_start_bot = r
+        else:
+            break  # found a non-spiking row — stop scanning upward
+
+    if _spike_start_bot < height - 2:
+        # Apply per-column clamping: for each spiking row, clamp brightness
+        # to the reference level (preserving relative structure within the row)
+        for r in range(_spike_start_bot, height):
+            row_data = _img_fc[r, :]
+            # How deep into the spike zone are we?
+            depth = r - _spike_start_bot  # 0 at start, grows toward bottom
+            total_depth = height - _spike_start_bot
+            # Fade: at spike_start use full correction, at bottom also full
+            # Clamp each pixel to min(pixel, reference * 1.05)
+            cap = _ref_band_bot * 1.05
+            _img_fc[r, :] = np.minimum(row_data, cap)
+        # Additionally, fade the last few rows to black (detector edge)
+        _edge_fade = min(8, height - _spike_start_bot)
+        for r in range(height - _edge_fade, height):
+            t = (height - r) / _edge_fade
+            _img_fc[r, :] *= t
+        log.info("Bottom spike suppression: rows %d-%d clamped (ratio>%.2f)",
+                 _spike_start_bot, height - 1, SPIKE_THRESH)
+
+    # --- Top spike suppression ---
+    _ref_lo_t = int(height * 0.15)
+    _ref_hi_t = int(height * 0.30)
+    _ref_band_top = np.mean(_img_fc[_ref_lo_t:_ref_hi_t, :], axis=0)
+    _ref_band_top = np.maximum(_ref_band_top, 1.0)
+    _ref_band_top = gaussian_filter1d(_ref_band_top.astype(np.float64),
+                                      sigma=30).astype(np.float32)
+
+    SPIKE_ZONE_TOP = int(height * 0.15)
+    _spike_end_top = -1
+    for r in range(0, SPIKE_ZONE_TOP):
+        row_data = _img_fc[r, :]
+        _signal_cols = _ref_band_top > 10
+        if not np.any(_signal_cols):
+            continue
+        ratio = np.median(row_data[_signal_cols] / _ref_band_top[_signal_cols])
+        if ratio > SPIKE_THRESH:
+            _spike_end_top = r
+        else:
+            break
+
+    if _spike_end_top > 0:
+        cap_t = _ref_band_top * 1.05
+        for r in range(0, _spike_end_top + 1):
+            _img_fc[r, :] = np.minimum(_img_fc[r, :], cap_t)
+        _edge_fade_t = min(8, _spike_end_top + 1)
+        for r in range(0, _edge_fade_t):
+            t = r / _edge_fade_t
+            _img_fc[r, :] *= t
+        log.info("Top spike suppression: rows 0-%d clamped", _spike_end_top)
+
+    img_8bit = np.clip(_img_fc, 0, 255).astype(np.uint8)
+
+    # Measure after
+    _bl_after = img_8bit[height - 180:, :150].astype(np.float32)
+    _br_after = img_8bit[height - 180:, -150:].astype(np.float32)
+    _bl_pct_after = float(np.sum(_bl_after > 240) / max(_bl_after.size, 1) * 100)
+    _br_pct_after = float(np.sum(_br_after > 240) / max(_br_after.size, 1) * 100)
+    log.info("Edge spike fix: BL>240: %.1f%%->%.1f%%  BR>240: %.1f%%->%.1f%%",
+             _bl_pct_before, _bl_pct_after, _br_pct_before, _br_pct_after)
+
+    # DEBUG: save result
+    Image.fromarray(img_8bit).save("debug_stage11_edge_spike.png")
+    log.info("DEBUG saved: debug_stage11_edge_spike.png")
 
     # ── Crop to standard output size ───────────────────────────────
     #   Sidexis outputs 2440×1280 from the raw 2706×1316.
