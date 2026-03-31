@@ -2424,16 +2424,13 @@ class PureXSApp(ctk.CTk):
         # PHASE 3 — Auto-upload to PureChart
         self._phase3_upload_to_purechart()
 
-        # DICOM export
+        # Auto-stitch panoramic if we got scanlines
+        # (DICOM export happens after reconstruction completes in _on_stitch_done)
         if self._expose_scanlines:
             self._log(
                 f"Post-processing: stitch {sl_count} scanlines + DICOM export",
                 "info",
             )
-        self._export_dicom()
-
-        # Auto-stitch panoramic if we got scanlines
-        if self._expose_scanlines:
             self._stitch_panoramic()
 
         # Refresh history window if open
@@ -2692,6 +2689,9 @@ class PureXSApp(ctk.CTk):
             "#4CAF50",
         )
 
+        # DICOM export using the fully processed image
+        self._export_dicom(img)
+
     def _display_pil_image(self, img: Image.Image) -> None:
         """Display a PIL Image on the main canvas, scaled to fill."""
         self._last_pil_image = img  # store for resize re-render
@@ -2865,24 +2865,32 @@ class PureXSApp(ctk.CTk):
     # ║  DICOM Export
     # ╚════════════════════════════════════════════════════════════════════════
 
-    def _export_dicom(self) -> None:
-        """Export the current scan as DICOM if patient is set and data exists."""
+    def _export_dicom(self, processed_image: "Image.Image | None" = None) -> None:
+        """Export the processed image as DICOM if patient is set.
+
+        Args:
+            processed_image: The fully reconstructed PIL Image (mode "L").
+                             Must be the same image displayed on the canvas
+                             (after crop, tone mapping, MUSICA, etc.).
+        """
         if not HAS_DICOM:
             self._log("DICOM export skipped (pydicom not installed)", "debug")
             return
         if not self._patient.get("set"):
             return
-        if not self._expose_scanlines:
+        if processed_image is None:
+            self._log("DICOM export skipped (no processed image)", "debug")
             return
 
         outdir = self._patient_output_dir()
+        img = processed_image
 
         def _do():
             try:
                 exporter = PureXSDICOM()
-                dcm_path = exporter.export(
+                dcm_path = exporter.export_image(
                     self._patient,
-                    self._expose_scanlines,
+                    img,
                     self._expose_kv_peak,
                     outdir,
                 )

@@ -250,15 +250,16 @@ class PureXSDICOM:
         output_dir: str | Path,
         exposure_time_ms: int = 4000,
     ) -> str:
-        """Export a processed PIL Image (8-bit grayscale) as DICOM.
+        """Export a processed image as DICOM.
 
-        This is the preferred method when using `reconstruct_image()` which
-        returns an 8-bit PIL Image with all corrections applied (dark, frame
-        equalization, MUSICA, crop).
+        Accepts 8-bit (uint8) or 16-bit (uint16) grayscale input.
+        The native dtype is preserved — uint16 is NOT downsampled to uint8.
+        BitsAllocated/BitsStored/HighBit and WindowCenter/WindowWidth are
+        set automatically based on the input dtype.
 
         Args:
             patient: Dict with keys: first, last, dob (MM/DD/YYYY), id, exam, set.
-            image: PIL Image (mode "L", 8-bit grayscale).
+            image: PIL Image (mode "L" or "I;16") or numpy array (uint8/uint16).
             kv_peak: Peak kV recorded during the exposure.
             output_dir: Directory to write the .dcm file into.
             exposure_time_ms: Nominal exposure duration in milliseconds.
@@ -278,12 +279,27 @@ class PureXSDICOM:
         if pixel_array.ndim != 2:
             raise RuntimeError(f"Expected 2D grayscale image, got shape {pixel_array.shape}")
 
-        rows, cols = pixel_array.shape
-        bits = 16 if pixel_array.dtype == np.uint16 else 8
+        # Preserve native dtype — do NOT force-convert uint16 to uint8
+        if pixel_array.dtype == np.uint16:
+            bits = 16
+        elif pixel_array.dtype == np.uint8:
+            bits = 8
+        else:
+            # Coerce other dtypes to uint16 to avoid data loss
+            pixel_array = np.clip(pixel_array, 0, 65535).astype(np.uint16)
+            bits = 16
 
+        rows, cols = pixel_array.shape
         log.info(
-            "DICOM export (processed): patient=%s^%s  %dx%d %d-bit  kV=%.1f",
-            patient["last"], patient["first"], cols, rows, bits, kv_peak,
+            "DICOM export (processed): patient=%s^%s  %dx%d  dtype=%s  %d-bit  kV=%.1f",
+            patient["last"], patient["first"], cols, rows,
+            pixel_array.dtype, bits, kv_peak,
+        )
+        print(
+            f"[DICOM] Embedding pixel data: {cols}x{rows}  "
+            f"dtype={pixel_array.dtype}  bits={bits}  "
+            f"min={pixel_array.min()}  max={pixel_array.max()}  "
+            f"mean={pixel_array.mean():.1f}"
         )
 
         output_dir = Path(output_dir)
@@ -342,7 +358,7 @@ class PureXSDICOM:
 
         # Pixel Module
         ds.SamplesPerPixel = 1
-        ds.PhotometricInterpretation = "MONOCHROME1"  # bone=bright convention
+        ds.PhotometricInterpretation = "MONOCHROME2"  # 0=black, processed image is display-ready
         ds.Rows = rows
         ds.Columns = cols
         ds.BitsAllocated = bits
