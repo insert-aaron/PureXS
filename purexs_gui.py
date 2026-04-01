@@ -1953,29 +1953,34 @@ class PureXSApp(ctk.CTk):
             return
 
         try:
-            # Re-decode from raw to get full resolution
+            img = None
+
+            # 1. Try raw bytes from API path
             if self._last_raw_image:
-                img = None
                 try:
                     img = Image.open(io.BytesIO(self._last_raw_image))
                     img.load()
                 except Exception:
                     img = self._decode_raw_16bit(self._last_raw_image)
 
-                if img is not None:
-                    # Convert 16-bit to 8-bit for PNG
-                    if img.mode in ("I;16", "I;16B"):
-                        import numpy as np
-                        arr = np.array(img, dtype=np.float32)
-                        if arr.max() > 0:
-                            arr = (arr / arr.max() * 255).astype(np.uint8)
-                        else:
-                            arr = arr.astype(np.uint8)
-                        img = Image.fromarray(arr, mode="L")
-                    img.save(path)
-                    self._log(f"Image saved: {path}", "info")
-                    Toast(self, f"Saved: {Path(path).name}", level="success")
-                    return
+            # 2. Fall back to reconstructed panoramic from direct TCP
+            if img is None and hasattr(self, "_last_pil_image") and self._last_pil_image is not None:
+                img = self._last_pil_image
+
+            if img is not None:
+                # Convert 16-bit to 8-bit for PNG
+                if img.mode in ("I;16", "I;16B"):
+                    import numpy as np
+                    arr = np.array(img, dtype=np.float32)
+                    if arr.max() > 0:
+                        arr = (arr / arr.max() * 255).astype(np.uint8)
+                    else:
+                        arr = arr.astype(np.uint8)
+                    img = Image.fromarray(arr, mode="L")
+                img.save(path)
+                self._log(f"Image saved: {path}", "info")
+                Toast(self, f"Saved: {Path(path).name}", level="success")
+                return
 
             Toast(self, "No image data to save", level="warning")
         except Exception as exc:
@@ -2913,6 +2918,7 @@ class PureXSApp(ctk.CTk):
         self._log(f"Panoramic stitched: {img.width}x{img.height}", "info")
         self._display_pil_image(img)
         self._save_pano_btn.configure(state="normal")
+        self._save_btn.configure(state="normal")
         self._enable_post_toolbar()
         self._new_patient_btn.configure(state="normal")
         self._set_status(
