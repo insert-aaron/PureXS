@@ -402,14 +402,14 @@ class PureXSApp(ctk.CTk):
         # PHASE 1-3 — PureChart patient list, search & upload
         self._purechart_patients: list = []       # List[PureChartPatient]
         self._selected_purechart: object = None   # currently selected PureChartPatient
-        self._facility_token: str = os.environ.get("PURECHART_FACILITY_TOKEN", "43bd5ee3a662f5cbf468bfc6402eb56ec685fb315461114275b4204402a2cf17")
+        self._facility_token: str = self._load_facility_token()
         self._purechart_loader: object = None
         self._purechart_uploader: object = None   # PHASE 3
         self._last_pano_path: str = ""            # PHASE 3 — path to last saved panoramic PNG
         self._last_upload_args: tuple = ()        # PHASE 5 — (patient_id, file_path, type, title)
         self._purechart_searching: bool = False   # PHASE 2 — True while bg search in flight
         self._profile_photo: ImageTk.PhotoImage | None = None  # prevent GC for profile pic
-        if HAS_PURECHART:
+        if HAS_PURECHART and self._facility_token:
             self._purechart_loader = PureChartPatientLoader(self._facility_token)
             self._purechart_uploader = PureChartUploader(self._facility_token)
 
@@ -452,6 +452,53 @@ class PureXSApp(ctk.CTk):
         # PHASE 1 — Load PureChart patients on startup (non-blocking)
         if HAS_PURECHART and self._purechart_loader:
             self.after(300, self._phase1_load_patients)
+
+    # ╔════════════════════════════════════════════════════════════════════════
+    # ║  Facility Token
+    # ╚════════════════════════════════════════════════════════════════════════
+
+    _CONFIG_FILE = "config.json"
+
+    def _get_config_path(self) -> Path:
+        return get_data_dir() / self._CONFIG_FILE
+
+    def _load_facility_token(self) -> str:
+        """Load facility token from ~/.purexs/config.json, or prompt if missing."""
+        cfg_path = self._get_config_path()
+        if cfg_path.exists():
+            try:
+                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                token = cfg.get("facility_token", "").strip()
+                if token:
+                    return token
+            except Exception:
+                pass
+        # No token found — prompt
+        return self._prompt_facility_token()
+
+    def _prompt_facility_token(self) -> str:
+        """Show a dialog asking for the facility token. Saves to config on success."""
+        dialog = ctk.CTkInputDialog(
+            title="Facility Setup",
+            text="Enter your PureChart facility token:",
+        )
+        token = (dialog.get_input() or "").strip()
+        if not token:
+            return ""
+        self._save_facility_token(token)
+        return token
+
+    def _save_facility_token(self, token: str) -> None:
+        """Persist the facility token to ~/.purexs/config.json."""
+        cfg_path = self._get_config_path()
+        cfg: dict = {}
+        if cfg_path.exists():
+            try:
+                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        cfg["facility_token"] = token
+        cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
     # ╔════════════════════════════════════════════════════════════════════════
     # ║  UI Construction
@@ -553,14 +600,30 @@ class PureXSApp(ctk.CTk):
         self._dock_frame.grid_propagate(False)
         self._dock_visible = True
 
-        # Hidden refs for search compatibility
+        # Search entry
         self._purechart_search_var = ctk.StringVar(value="")
         self._purechart_debounce_id: str | None = None
+        self._search_entry = ctk.CTkEntry(
+            self._dock_frame,
+            textvariable=self._purechart_search_var,
+            placeholder_text="\U0001F50D Search",
+            width=76, height=28,
+            font=ctk.CTkFont(size=10),
+            corner_radius=6,
+            fg_color="#161B22",
+            border_color="#30363D",
+            text_color="#C9D1D9",
+            placeholder_text_color="#484F58",
+        )
+        self._search_entry.pack(padx=4, pady=(6, 2))
+        self._purechart_search_var.trace_add("write", self._on_purechart_search_typed)
+
+        # Status label (result count / loading / errors)
         self._purechart_status = ctk.CTkLabel(
             self._dock_frame, text="", font=ctk.CTkFont(size=8),
             text_color="#757575", wraplength=76,
         )
-        self._purechart_status.pack(padx=4, pady=(6, 2))
+        self._purechart_status.pack(padx=4, pady=(0, 2))
 
         # Scrollable avatar column (single column, vertical)
         self._avatar_dock_frame = ctk.CTkScrollableFrame(
