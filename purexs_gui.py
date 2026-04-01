@@ -384,6 +384,15 @@ class PureXSApp(ctk.CTk):
         self._last_pil_image: Image.Image | None = None     # for resize re-render
         self._last_raw_image: bytes = b""
 
+        # ── Zoom & pan state ─────────────────────────────────────────────────
+        self._zoom_level: float = 1.0       # 1.0 = fit-to-canvas
+        self._pan_x: float = 0.0            # pan offset in image-pixel coords
+        self._pan_y: float = 0.0
+        self._drag_start_x: int = 0         # mouse position at drag start
+        self._drag_start_y: int = 0
+        self._drag_pan_x0: float = 0.0      # pan offset at drag start
+        self._drag_pan_y0: float = 0.0
+
         # ── Patient workflow state ─────────────────────────────────────────────
         self._patient: dict = {
             "first": "", "last": "", "dob": "", "id": "",
@@ -891,6 +900,14 @@ class PureXSApp(ctk.CTk):
 
         # Placeholder text
         self._canvas.bind("<Configure>", self._on_canvas_resize)
+
+        # Zoom & pan bindings
+        self._canvas.bind("<MouseWheel>", self._on_canvas_scroll)          # Windows/macOS
+        self._canvas.bind("<Button-4>", self._on_canvas_scroll)            # Linux scroll up
+        self._canvas.bind("<Button-5>", self._on_canvas_scroll)            # Linux scroll down
+        self._canvas.bind("<ButtonPress-1>", self._on_canvas_drag_start)
+        self._canvas.bind("<B1-Motion>", self._on_canvas_drag)
+        self._canvas.bind("<Double-Button-1>", self._on_canvas_zoom_reset)
         self._canvas_text_id = self._canvas.create_text(
             0, 0,
             text="No Image\n\nConnect a device and press EXPOSE",
@@ -966,6 +983,23 @@ class PureXSApp(ctk.CTk):
             command=self._on_view_dicom, state="disabled",
         )
         self._view_dcm_btn.pack(side="left", padx=(0, 4))
+
+        # Zoom label
+        self._zoom_label = ctk.CTkLabel(
+            toolbar_btns, text="100%",
+            font=ctk.CTkFont(size=10, weight="bold"), text_color="#78909C",
+            width=48,
+        )
+        self._zoom_label.pack(side="right", padx=(0, 2))
+
+        # Fit button (reset zoom)
+        self._fit_btn = ctk.CTkButton(
+            toolbar_btns, text="Fit", width=40, height=28,
+            font=ctk.CTkFont(size=10),
+            fg_color="#37474F", hover_color="#455A64",
+            command=self._on_canvas_zoom_reset, state="disabled",
+        )
+        self._fit_btn.pack(side="right", padx=(0, 4))
 
         # Reset adjustments button
         self._reset_adj_btn = ctk.CTkButton(
@@ -1102,12 +1136,149 @@ class PureXSApp(ctk.CTk):
         """Re-render stored image at new canvas size."""
         self._resize_debounce_id = None
         if self._last_pil_image is not None:
-            self._display_pil_image(self._last_pil_image)
+            self._render_to_canvas(self._last_pil_image)
         elif self._last_raw_image:
             try:
                 self._display_image_bytes(self._last_raw_image, refit=True)
             except Exception:
                 pass
+
+    # ── Zoom & Pan ──────────────────────────────────────────────────────
+
+    def _render_to_canvas(self, img: Image.Image) -> None:
+        """Render a PIL image to the canvas with current zoom & pan applied."""
+        cw = self._canvas.winfo_width()
+        ch = self._canvas.winfo_height()
+        if cw < 10 or ch < 10:
+            cw, ch = 800, 500
+
+        img_w, img_h = img.size
+        base_scale = min(cw / img_w, ch / img_h)
+        scale = base_scale * self._zoom_level
+
+        new_w = max(int(img_w * scale), 1)
+        new_h = max(int(img_h * scale), 1)
+
+        # Clamp pan so image doesn't disappear off-canvas
+        max_pan_x = max((new_w - cw) / 2 / scale, 0)
+        max_pan_y = max((new_h - ch) / 2 / scale, 0)
+        self._pan_x = max(-max_pan_x, min(max_pan_x, self._pan_x))
+        self._pan_y = max(-max_pan_y, min(max_pan_y, self._pan_y))
+
+        # Crop visible region from source image for quality
+        cx = cw / 2 - self._pan_x * scale
+        cy = ch / 2 - self._pan_y * scale
+
+        display_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+        self._photo_image = ImageTk.PhotoImage(display_img)
+        self._canvas.delete("all")
+        self._canvas.create_image(
+            int(cw / 2 - self._pan_x * scale),
+            int(ch / 2 - self._pan_y * scale),
+            image=self._photo_image, anchor="center",
+        )
+
+        # Update zoom label
+        pct = int(self._zoom_level * 100)
+        try:
+            self._zoom_label.configure(text=f"{pct}%")
+        except Exception:
+            pass
+
+    def _on_canvas_scroll(self, event: tk.Event) -> None:
+        """Zoom in/out on mouse wheel, centered on cursor position."""
+        if self._last_pil_image is None:
+            return
+
+        # Determine scroll direction
+        if event.num == 4:
+            delta = 1
+        elif event.num == 5:
+            delta = -1
+        else:
+            delta = event.delta
+
+        factor = 1.15 if delta > 0 else 1 / 1.15
+        new_zoom = self._zoom_level * factor
+        new_zoom = max(0.2, min(20.0, new_zoom))
+
+        # Zoom toward cursor position
+        cw = self._canvas.winfo_width()
+        ch = self._canvas.winfo_height()
+        img_w, img_h = self._last_pil_image.size
+        base_scale = min(cw / img_w, ch / img_h)
+
+        # Mouse position relative to canvas center
+        mx = event.x - cw / 2
+        my = event.y - ch / 2
+
+        # Adjust pan so the point under the cursor stays fixed
+        old_scale = base_scale * self._zoom_level
+        new_scale = base_scale * new_zoom
+        if old_scale > 0:
+            self._pan_x = self._pan_x - mx * (1 / old_scale - 1 / new_scale)
+            self._pan_y = self._pan_y - my * (1 / old_scale - 1 / new_scale)
+
+        self._zoom_level = new_zoom
+
+        # Update cursor: grab hand when zoomed in, crosshair at fit
+        self._canvas.configure(cursor="fleur" if self._zoom_level > 1.05 else "crosshair")
+
+        self._render_current_image()
+
+    def _on_canvas_drag_start(self, event: tk.Event) -> None:
+        """Start dragging to pan the image."""
+        self._drag_start_x = event.x
+        self._drag_start_y = event.y
+        self._drag_pan_x0 = self._pan_x
+        self._drag_pan_y0 = self._pan_y
+
+    def _on_canvas_drag(self, event: tk.Event) -> None:
+        """Pan the image while dragging."""
+        if self._last_pil_image is None or self._zoom_level <= 1.01:
+            return
+
+        cw = self._canvas.winfo_width()
+        ch = self._canvas.winfo_height()
+        img_w, img_h = self._last_pil_image.size
+        base_scale = min(cw / img_w, ch / img_h)
+        scale = base_scale * self._zoom_level
+
+        dx = event.x - self._drag_start_x
+        dy = event.y - self._drag_start_y
+
+        self._pan_x = self._drag_pan_x0 + dx / scale
+        self._pan_y = self._drag_pan_y0 + dy / scale
+
+        self._render_current_image()
+
+    def _on_canvas_zoom_reset(self, _event=None) -> None:
+        """Reset zoom to fit-to-canvas."""
+        self._zoom_level = 1.0
+        self._pan_x = 0.0
+        self._pan_y = 0.0
+        self._canvas.configure(cursor="crosshair")
+        self._render_current_image()
+
+    def _render_current_image(self) -> None:
+        """Re-render whatever image is currently displayed with zoom/pan."""
+        if self._last_pil_image is not None:
+            # Re-apply brightness/contrast if adjusted
+            brightness = self._brightness_var.get()
+            contrast = self._contrast_var.get()
+            img = self._last_pil_image
+
+            if abs(contrast - 1.0) > 0.01:
+                from PIL import ImageEnhance
+                img = ImageEnhance.Contrast(img).enhance(contrast)
+            if abs(brightness) > 1:
+                import numpy as _np
+                arr = _np.array(img, dtype=_np.int16)
+                arr = _np.clip(arr + int(brightness), 0, 255).astype(_np.uint8)
+                img = Image.fromarray(arr)
+
+            self._render_to_canvas(img)
 
     # ╔════════════════════════════════════════════════════════════════════════
     # ║  API Health Check
@@ -1607,24 +1778,21 @@ class PureXSApp(ctk.CTk):
         elif img.mode not in ("L", "RGB", "RGBA"):
             img = img.convert("L")
 
-        # Scale to fit canvas
-        cw = self._canvas.winfo_width()
-        ch = self._canvas.winfo_height()
-        if cw < 10 or ch < 10:
-            cw, ch = 600, 400
+        # Store and reset zoom for new image
+        self._last_pil_image = img
+        self._zoom_level = 1.0
+        self._pan_x = 0.0
+        self._pan_y = 0.0
+        self._canvas.configure(cursor="crosshair")
 
         img_w, img_h = img.size
-        scale = min(cw / img_w, ch / img_h, 1.0)
-        new_w = max(int(img_w * scale), 1)
-        new_h = max(int(img_h * scale), 1)
-        display_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        self._render_to_canvas(img)
 
-        # Render to canvas
-        self._photo_image = ImageTk.PhotoImage(display_img)
-        self._canvas.delete("all")
-        self._canvas.create_image(
-            cw // 2, ch // 2, image=self._photo_image, anchor="center"
-        )
+        # Enable Fit button
+        try:
+            self._fit_btn.configure(state="normal")
+        except Exception:
+            pass
 
         # Update info
         self._img_info_label.configure(
@@ -2696,22 +2864,15 @@ class PureXSApp(ctk.CTk):
         """Display a PIL Image on the main canvas, scaled to fill."""
         self._last_pil_image = img  # store for resize re-render
 
-        cw = self._canvas.winfo_width()
-        ch = self._canvas.winfo_height()
-        if cw < 10 or ch < 10:
-            cw, ch = 800, 500
+        # Reset zoom/pan for new image
+        self._zoom_level = 1.0
+        self._pan_x = 0.0
+        self._pan_y = 0.0
+        self._canvas.configure(cursor="crosshair")
 
         img_w, img_h = img.size
-        scale = min(cw / img_w, ch / img_h)
-        new_w = max(int(img_w * scale), 1)
-        new_h = max(int(img_h * scale), 1)
-        display_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        self._render_to_canvas(img)
 
-        self._photo_image = ImageTk.PhotoImage(display_img)
-        self._canvas.delete("all")
-        self._canvas.create_image(
-            cw // 2, ch // 2, image=self._photo_image, anchor="center",
-        )
         self._img_info_label.configure(
             text=(
                 f"{img_w}\u00D7{img_h}  |  "
@@ -2719,6 +2880,12 @@ class PureXSApp(ctk.CTk):
                 f"Exposure #{self._expose_count}"
             )
         )
+
+        # Enable Fit button
+        try:
+            self._fit_btn.configure(state="normal")
+        except Exception:
+            pass
 
     # ── Post-display toolbar logic ──────────────────────────────────────
 
@@ -2729,6 +2896,7 @@ class PureXSApp(ctk.CTk):
         self._reset_adj_btn.configure(state="normal")
         self._save_btn.configure(state="normal")
         self._save_raw_btn.configure(state="normal")
+        self._fit_btn.configure(state="normal")
 
     def _disable_post_toolbar(self) -> None:
         """Disable all post-display toolbar controls."""
@@ -2739,6 +2907,7 @@ class PureXSApp(ctk.CTk):
         self._save_raw_btn.configure(state="disabled")
         self._open_dcm_btn.configure(state="disabled")
         self._view_dcm_btn.configure(state="disabled")
+        self._fit_btn.configure(state="disabled")
 
     _adjust_debounce_id: str | None = None
 
@@ -2753,47 +2922,14 @@ class PureXSApp(ctk.CTk):
         self._adjust_debounce_id = None
         if self._last_pil_image is None:
             return
-
-        from PIL import ImageEnhance
-
-        brightness = self._brightness_var.get()  # -80 to +80
-        contrast = self._contrast_var.get()       # 0.3 to 3.0
-
-        img = self._last_pil_image
-        # Apply contrast
-        if abs(contrast - 1.0) > 0.01:
-            img = ImageEnhance.Contrast(img).enhance(contrast)
-        # Apply brightness as offset
-        if abs(brightness) > 1:
-            import numpy as _np
-            arr = _np.array(img, dtype=_np.int16)
-            arr = _np.clip(arr + int(brightness), 0, 255).astype(_np.uint8)
-            img = Image.fromarray(arr)
-
-        # Re-render adjusted image (don't overwrite _last_pil_image)
-        cw = self._canvas.winfo_width()
-        ch = self._canvas.winfo_height()
-        if cw < 10 or ch < 10:
-            cw, ch = 800, 500
-
-        img_w, img_h = img.size
-        scale = min(cw / img_w, ch / img_h)
-        new_w = max(int(img_w * scale), 1)
-        new_h = max(int(img_h * scale), 1)
-        display_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-
-        self._photo_image = ImageTk.PhotoImage(display_img)
-        self._canvas.delete("all")
-        self._canvas.create_image(
-            cw // 2, ch // 2, image=self._photo_image, anchor="center",
-        )
+        self._render_current_image()
 
     def _on_reset_adjustments(self) -> None:
         """Reset brightness/contrast to defaults."""
         self._brightness_var.set(0.0)
         self._contrast_var.set(1.0)
         if self._last_pil_image is not None:
-            self._display_pil_image(self._last_pil_image)
+            self._render_current_image()
 
     def _on_save_panoramic(self) -> None:
         """Save the stitched panoramic image."""
@@ -3389,12 +3525,12 @@ class PureXSApp(ctk.CTk):
 
     # PHASE 1
     def _phase1_load_patients(self) -> None:
-        """Kick off an initial broad PureChart search in a background thread."""
+        """Load today's scheduled patients for this facility on startup."""
         self._purechart_status.configure(
-            text="Loading patients...", text_color="#FFA726"
+            text="Loading today's patients...", text_color="#FFA726"
         )
-        self._log("PureChart: loading patients...", "info")
-        self._purechart_run_search("a")
+        self._log("PureChart: loading today's patients...", "info")
+        self._purechart_run_search("")
 
     # PHASE 2
     def _on_purechart_search_typed(self, *_args) -> None:
@@ -3406,6 +3542,12 @@ class PureXSApp(ctk.CTk):
             self.after_cancel(self._purechart_debounce_id)
             self._purechart_debounce_id = None
         query = self._purechart_search_var.get().strip()
+        if len(query) == 0:
+            # Empty — reload recent patients
+            self._purechart_debounce_id = self.after(
+                400, self._purechart_run_search, ""
+            )
+            return
         if len(query) < 2:
             # Too short — clear dock
             self._purechart_patients = []
