@@ -2078,6 +2078,69 @@ def reconstruct_image(
 
     img_f = img_array.astype(np.float32)
 
+    # ── Flat-field calibration (if available) ────────────────────────
+    #   If a pre-computed flat-field normalization map exists, apply it
+    #   as a 2D pixel-by-pixel gain correction.  This eliminates tile
+    #   grid artifacts at the source and replaces the downstream column
+    #   correction pipeline.  Falls through to the old pipeline if the
+    #   flat-field file is not present.
+    import os as _os
+    _FF_PATH = _os.path.join(_os.path.dirname(__file__), "flat_field_norm.npy")
+    if _os.path.exists(_FF_PATH) and height == 1316 and width == 2706:
+        try:
+            import cv2
+            _ff_norm = np.load(_FF_PATH)
+            if _ff_norm.shape == (height, width):
+                log.info("Flat-field calibration: loading %s", _FF_PATH)
+
+                # Interpolate known dead rows
+                for _dr in [426, 853]:
+                    if 1 <= _dr < height - 1:
+                        img_f[_dr, :] = (img_f[_dr - 1, :] + img_f[_dr + 1, :]) / 2.0
+                        _ff_norm[_dr, :] = (_ff_norm[_dr - 1, :] + _ff_norm[_dr + 1, :]) / 2.0
+
+                # Dark subtraction
+                _dark_pt = np.median(img_f[:, :80], axis=1)
+                _pt_dark = np.maximum(img_f - _dark_pt[:, np.newaxis], 0)
+
+                # 2D flat-field correction
+                _corrected = _pt_dark / np.maximum(_ff_norm, 0.05)
+
+                # CLAHE tone mapping on active zone (rows 40-1220)
+                _ACTIVE_TOP, _ACTIVE_BOT = 40, min(1220, height)
+                _active = _corrected[_ACTIVE_TOP:_ACTIVE_BOT, :]
+                _p01 = np.percentile(_active[:, 400:min(width, 2300)], 1)
+                _p999 = np.percentile(_active[:, 400:min(width, 2300)], 99.5)
+                _img16 = np.clip((_active - _p01) / max(_p999 - _p01, 1) * 65535,
+                                 0, 65535).astype(np.uint16)
+                _clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(16, 16))
+                _img_clahe = _clahe.apply(_img16)
+                _img8 = 255 - (_img_clahe / 257).astype(np.uint8)
+
+                # Resize active zone to standard output (2440x1280)
+                _final = np.array(
+                    Image.fromarray(_img8).resize((2440, 1280), Image.LANCZOS)
+                )
+
+                # Sharpen
+                _img_pil = Image.fromarray(_final, mode="L")
+                try:
+                    from PIL import ImageFilter
+                    _img_pil = _img_pil.filter(
+                        ImageFilter.UnsharpMask(radius=2, percent=80, threshold=3)
+                    )
+                except Exception:
+                    pass
+
+                log.info("Flat-field calibration complete: %dx%d",
+                         _final.shape[1], _final.shape[0])
+                return _img_pil
+            else:
+                log.warning("Flat-field shape mismatch: %s vs (%d,%d)",
+                            _ff_norm.shape, height, width)
+        except Exception as _exc:
+            log.warning("Flat-field calibration failed: %s", _exc)
+
     # ── Dark current correction ──────────────────────────────────────
     #   The first ~100 columns are pre-exposure dark frames (before the
     #   X-ray turns on) and the last ~25 columns are post-exposure.
