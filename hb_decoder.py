@@ -2103,17 +2103,29 @@ def reconstruct_image(
                 _dark_pt = np.median(img_f[:, :80], axis=1)
                 _pt_dark = np.maximum(img_f - _dark_pt[:, np.newaxis], 0)
 
-                # 2D flat-field correction
-                _corrected = _pt_dark / np.maximum(_ff_norm, 0.05)
+                # 2D flat-field correction — skip shadow zones
+                _safe = _ff_norm > 0.3
+                _corrected = np.where(_safe,
+                                      _pt_dark / np.maximum(_ff_norm, 0.3),
+                                      _pt_dark)
+                log.info("Flat-field shadow zone: %.1f%% pixels skipped",
+                         (~_safe).mean() * 100)
+
+                # Column normalization (removes residual beam shape)
+                from scipy.ndimage import gaussian_filter1d as _gf1d_ff
+                _col_m = _corrected[40:min(1220, height), :].mean(axis=0)
+                _col_t = _gf1d_ff(_col_m.astype(np.float64), sigma=200)
+                _col_n = _col_t.mean() / np.maximum(_col_t, 1)
+                _corrected = _corrected * _col_n[np.newaxis, :]
 
                 # CLAHE tone mapping on active zone (rows 40-1220)
                 _ACTIVE_TOP, _ACTIVE_BOT = 40, min(1220, height)
                 _active = _corrected[_ACTIVE_TOP:_ACTIVE_BOT, :]
                 _p01 = np.percentile(_active[:, 400:min(width, 2300)], 1)
-                _p999 = np.percentile(_active[:, 400:min(width, 2300)], 99.5)
+                _p999 = np.percentile(_active[:, 400:min(width, 2300)], 98)
                 _img16 = np.clip((_active - _p01) / max(_p999 - _p01, 1) * 65535,
                                  0, 65535).astype(np.uint16)
-                _clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(16, 16))
+                _clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(16, 16))
                 _img_clahe = _clahe.apply(_img16)
                 _img8 = 255 - (_img_clahe / 257).astype(np.uint8)
 
