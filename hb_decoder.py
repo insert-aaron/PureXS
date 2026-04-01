@@ -2768,6 +2768,36 @@ def reconstruct_image(
     Image.fromarray(img_8bit).save("debug_stage09_tone_lut.png")
     log.info("DEBUG saved: debug_stage09_tone_lut.png")
 
+    # ── Per-die row correction (display domain) ────────────────────────
+    #   Smooths per-row brightness variation from frame-group banding.
+    #   Runs independently on each die half (sigma=20).
+    _die_boundary_disp = 580
+    _prc_left = (_linear_content_left + 50) if '_linear_content_left' in dir() else 150
+    _prc_right = (_linear_content_right - 50) if '_linear_content_right' in dir() else width - 150
+    _img_f_prc = img_8bit.astype(np.float32)
+
+    for _prc_label, _prc_r_lo, _prc_r_hi in [
+        ("upper", 80, max(80, _die_boundary_disp - 20)),
+        ("lower", min(height - 80, _die_boundary_disp + 20), min(height - 80, 1200)),
+    ]:
+        if _prc_r_hi <= _prc_r_lo + 50:
+            continue
+        _prc_row_means = np.array([
+            float(np.mean(_img_f_prc[r, _prc_left:_prc_right]))
+            for r in range(_prc_r_lo, _prc_r_hi)
+        ], dtype=np.float64)
+        _prc_row_means = np.maximum(_prc_row_means, 1.0)
+        _prc_row_smooth = gaussian_filter1d(_prc_row_means, sigma=20).astype(np.float32)
+        _prc_row_corr = np.clip(_prc_row_smooth / _prc_row_means, 0.97, 1.03)
+        _prc_std = float(np.std(_prc_row_corr))
+        if _prc_std > 0.003:
+            for _i, _r in enumerate(range(_prc_r_lo, _prc_r_hi)):
+                _img_f_prc[_r, :] *= _prc_row_corr[_i]
+            log.info("Per-die row corr (%s): rows [%d,%d]  correction_std=%.4f",
+                     _prc_label, _prc_r_lo, _prc_r_hi, _prc_std)
+
+    img_8bit = np.clip(_img_f_prc, 0, 255).astype(np.uint8)
+
     # ── Post-MUSICA column correction (display domain) ────────────────
     #   The linear-domain column correction (stage 1, sigma=200) removes
     #   slow beam-shape variation.  But the gamma inversion + MUSICA
@@ -3045,59 +3075,89 @@ def reconstruct_image(
     Image.fromarray(img_8bit).save("debug_stage11_edge_spike.png")
     log.info("DEBUG saved: debug_stage11_edge_spike.png")
 
-    # ── Die junction equalization ──────────────────────────────────
-    #   The upper and lower CMOS dies have independent gain.  After all
-    #   corrections, a brightness step may remain at the die boundary.
-    #   Measure the mean brightness of interior rows well above and
-    #   below the junction, compute a scale factor, and blend it
-    #   smoothly across the junction zone.
-    #   The die boundary in the original detector is at row 580;
-    #   after row_top=18 crop offset it maps to ~562 in cropped coords.
-    #   But the image is still uncropped here (1316 rows), so use
-    #   original detector coords.
-    DIE_BOUNDARY = dead_row if 'dead_row' in dir() else 580
-    DIE_BLEND = 60  # ±60 rows cosine blend
-    _meas_cols = slice(300, min(width - 300, 2100))
-
-    # Reference bands well away from the junction
-    _upper_ref_rows = slice(max(0, DIE_BOUNDARY - 200), max(0, DIE_BOUNDARY - 80))
-    _lower_ref_rows = slice(min(height, DIE_BOUNDARY + 80), min(height, DIE_BOUNDARY + 200))
-    _upper_ref = float(np.mean(img_8bit[_upper_ref_rows, _meas_cols].astype(np.float32)))
-    _lower_ref = float(np.mean(img_8bit[_lower_ref_rows, _meas_cols].astype(np.float32)))
-
-    if _lower_ref > 1.0 and _upper_ref > 1.0:
-        _die_scale = np.clip(_upper_ref / _lower_ref, 0.90, 1.10)
-        _img_die = img_8bit.astype(np.float32)
-
-        if abs(_die_scale - 1.0) > 0.005:
-            # Apply scale to lower die with cosine blend across junction
-            _blend_lo = max(0, DIE_BOUNDARY - DIE_BLEND)
-            _blend_hi = min(height, DIE_BOUNDARY + DIE_BLEND)
-            for r in range(_blend_lo, _blend_hi):
-                t = (r - _blend_lo) / max(_blend_hi - _blend_lo, 1)
-                # Cosine ramp: 0 at _blend_lo (no correction), 1 at _blend_hi
-                blend = 0.5 * (1.0 - np.cos(np.pi * t))
-                row_scale = 1.0 + (_die_scale - 1.0) * blend
-                _img_die[r, :] *= row_scale
-            # Full scale for all rows below the blend zone
-            _img_die[_blend_hi:, :] *= _die_scale
-            img_8bit = np.clip(_img_die, 0, 255).astype(np.uint8)
-
-            # Verify
-            _upper_after = float(np.mean(img_8bit[_upper_ref_rows, _meas_cols].astype(np.float32)))
-            _lower_after = float(np.mean(img_8bit[_lower_ref_rows, _meas_cols].astype(np.float32)))
-            _ratio_after = _upper_after / max(_lower_after, 1)
-            log.info("Die junction eq: scale=%.4f  before=%.1f/%.1f(%.4f)  "
-                     "after=%.1f/%.1f(%.4f)  blend=%d-%d",
-                     _die_scale, _upper_ref, _lower_ref, _upper_ref / _lower_ref,
-                     _upper_after, _lower_after, _ratio_after,
-                     _blend_lo, _blend_hi)
-        else:
-            log.info("Die junction eq: scale=%.4f (within 0.5%%, skipped)",
-                     _die_scale)
+    # ── Die junction equalization (content-aware) ───────────────────
+    #   Only apply if background margins show a consistent gain step.
+    DIE_BOUNDARY = 580
+    _die_img_f = img_8bit.astype(np.float32)
+    _die_steps = {}
+    for _name, _c_lo, _c_hi in [("left_bg", 50, min(200, width)),
+                                  ("right_bg", max(0, width - 200), width - 50)]:
+        _above = float(np.mean(_die_img_f[max(0, DIE_BOUNDARY - 60):max(0, DIE_BOUNDARY - 10),
+                                           _c_lo:_c_hi]))
+        _below = float(np.mean(_die_img_f[min(height, DIE_BOUNDARY + 10):min(height, DIE_BOUNDARY + 60),
+                                           _c_lo:_c_hi]))
+        _die_steps[_name] = _above / max(_below, 1.0)
+    _bg_avg_step = (abs(_die_steps.get("left_bg", 1.0) - 1.0) +
+                    abs(_die_steps.get("right_bg", 1.0) - 1.0)) / 2
+    if _bg_avg_step > 0.03:
+        _die_scale = np.clip((_die_steps["left_bg"] + _die_steps["right_bg"]) / 2,
+                             0.85, 1.15)
+        if abs(_die_scale - 1.0) > 0.02:
+            _die_img_f[DIE_BOUNDARY:, :] *= _die_scale
+            for r in range(max(0, DIE_BOUNDARY - 60), DIE_BOUNDARY):
+                t = (r - (DIE_BOUNDARY - 60)) / 60
+                _die_img_f[r, :] *= 1.0 + (_die_scale - 1.0) * 0.5 * (1.0 - np.cos(np.pi * t))
+            img_8bit = np.clip(_die_img_f, 0, 255).astype(np.uint8)
+            log.info("Die junction eq APPLIED: scale=%.4f (bg_step=%.1f%%)",
+                     _die_scale, _bg_avg_step * 100)
     else:
-        log.info("Die junction eq: skipped (low signal: upper=%.1f lower=%.1f)",
-                 _upper_ref, _lower_ref)
+        log.info("Die junction eq SKIPPED: bg_step=%.1f%% (anatomy, not die)",
+                 _bg_avg_step * 100)
+
+    # ── Anatomy-only tone match ──────────────────────────────────────
+    TONE_ANAT_THRESH = 60
+    TONE_TARGET_P10, TONE_TARGET_P50, TONE_TARGET_P90 = 82.0, 110.0, 138.0
+    _tone_int = img_8bit[200:min(height - 200, 1000),
+                         width // 5:width * 4 // 5].astype(np.float32)
+    _tone_anat = _tone_int[_tone_int > TONE_ANAT_THRESH]
+    if len(_tone_anat) > 1000:
+        _cur_p10 = float(np.percentile(_tone_anat, 10))
+        _cur_p90 = float(np.percentile(_tone_anat, 90))
+        if _cur_p90 > _cur_p10 + 5:
+            _img_tone = img_8bit.astype(np.float32)
+            _active_tone = _img_tone > 5
+            _stretched = ((_img_tone - _cur_p10) / (_cur_p90 - _cur_p10)
+                          * (TONE_TARGET_P90 - TONE_TARGET_P10) + TONE_TARGET_P10)
+            _s_int = _stretched[200:min(height - 200, 1000),
+                                width // 5:width * 4 // 5]
+            _s_anat = _s_int[_s_int > TONE_ANAT_THRESH]
+            _gamma_t = 1.0
+            if len(_s_anat) > 100:
+                _cur_p50_s = float(np.percentile(_s_anat, 50))
+                _cur_norm = (_cur_p50_s - TONE_TARGET_P10) / (TONE_TARGET_P90 - TONE_TARGET_P10)
+                _tw_norm = (TONE_TARGET_P50 - TONE_TARGET_P10) / (TONE_TARGET_P90 - TONE_TARGET_P10)
+                if 0.05 < _cur_norm < 0.95 and 0.05 < _tw_norm < 0.95:
+                    _gamma_t = np.clip(np.log(_tw_norm) / np.log(_cur_norm), 0.5, 2.0)
+                    _norm = np.clip((_stretched - TONE_TARGET_P10)
+                                    / (TONE_TARGET_P90 - TONE_TARGET_P10), 0, 1)
+                    _norm = np.power(_norm, _gamma_t)
+                    _stretched = _norm * (TONE_TARGET_P90 - TONE_TARGET_P10) + TONE_TARGET_P10
+            img_8bit = np.where(_active_tone, _stretched, 0)
+            img_8bit = np.clip(img_8bit, 0, 255).astype(np.uint8)
+            log.info("Anatomy tone match: [%.0f,%.0f] -> [%.0f,%.0f] gamma=%.3f",
+                     _cur_p10, _cur_p90, TONE_TARGET_P10, TONE_TARGET_P90, _gamma_t)
+
+    # ── Second edge deband pass (after tone match) ────────────────────
+    _meas_s2 = slice(width // 5, width * 4 // 5)
+    _img_f_ed2 = img_8bit.astype(np.float32)
+    for r in range(min(150, height) - 1, 0, -1):
+        _cm_e = float(np.mean(_img_f_ed2[r, _meas_s2]))
+        _nm_e = float(np.mean(_img_f_ed2[r + 1, _meas_s2]))
+        if _cm_e > _nm_e and _nm_e > 0.1:
+            _img_f_ed2[r, :] *= _nm_e / max(_cm_e, 0.1)
+    for r in range(max(height - 150, 0), height):
+        _cm_e = float(np.mean(_img_f_ed2[r, _meas_s2]))
+        _pm_e = float(np.mean(_img_f_ed2[r - 1, _meas_s2]))
+        if _cm_e > _pm_e and _pm_e > 0.1:
+            _img_f_ed2[r, :] *= _pm_e / max(_cm_e, 0.1)
+    _ed_rm2 = np.mean(_img_f_ed2[:, _meas_s2], axis=1).astype(np.float64)
+    _ed_trend2 = gaussian_filter1d(_ed_rm2, sigma=15).astype(np.float32)
+    for r in list(range(0, min(150, height))) + \
+             list(range(max(height - 150, 0), height)):
+        if _ed_rm2[r] > 0.1:
+            _corr_e = np.clip(float(_ed_trend2[r]) / float(_ed_rm2[r]), 0.80, 1.25)
+            _img_f_ed2[r, :] *= _corr_e
+    img_8bit = np.clip(_img_f_ed2, 0, 255).astype(np.uint8)
 
     # ── Crop to standard output size ───────────────────────────────
     #   Sidexis outputs 2440×1280 from the raw 2706×1316.
