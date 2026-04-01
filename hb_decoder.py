@@ -2095,9 +2095,9 @@ def reconstruct_image(
 
                 # Interpolate known dead rows
                 for _dr in [426, 853]:
-                    if 1 <= _dr < height - 1:
-                        img_f[_dr, :] = (img_f[_dr - 1, :] + img_f[_dr + 1, :]) / 2.0
-                        _ff_norm[_dr, :] = (_ff_norm[_dr - 1, :] + _ff_norm[_dr + 1, :]) / 2.0
+                    if 2 <= _dr < height - 2:
+                        img_f[_dr, :] = (img_f[_dr - 2, :] * 0.25 + img_f[_dr - 1, :] * 0.25 + img_f[_dr + 1, :] * 0.25 + img_f[_dr + 2, :] * 0.25)
+                        _ff_norm[_dr, :] = (_ff_norm[_dr - 2, :] * 0.25 + _ff_norm[_dr - 1, :] * 0.25 + _ff_norm[_dr + 1, :] * 0.25 + _ff_norm[_dr + 2, :] * 0.25)
 
                 # Dark subtraction
                 _dark_pt = np.median(img_f[:, :80], axis=1)
@@ -2122,16 +2122,23 @@ def reconstruct_image(
                 _ACTIVE_TOP, _ACTIVE_BOT = 40, min(1220, height)
                 _active = _corrected[_ACTIVE_TOP:_ACTIVE_BOT, :]
                 _p01 = np.percentile(_active[:, 400:min(width, 2300)], 1)
-                _p999 = np.percentile(_active[:, 400:min(width, 2300)], 98)
+                _p999 = np.percentile(_active[:, 400:min(width, 2300)], 96)
                 _img16 = np.clip((_active - _p01) / max(_p999 - _p01, 1) * 65535,
                                  0, 65535).astype(np.uint16)
-                _clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(16, 16))
+                _clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(16, 16))
                 _img_clahe = _clahe.apply(_img16)
                 _img8 = 255 - (_img_clahe / 257).astype(np.uint8)
 
                 # Resize active zone to standard output (2440x1280)
                 _final = np.array(
                     Image.fromarray(_img8).resize((2440, 1280), Image.LANCZOS)
+                )
+
+                # Center crop to remove collimator borders, then zoom back
+                _final = np.array(
+                    Image.fromarray(_final[100:550, 350:2100]).resize(
+                        (2440, 1280), Image.LANCZOS
+                    )
                 )
 
                 # Sharpen

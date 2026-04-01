@@ -1,0 +1,9 @@
+{
+  "full_scan": {
+    "size": 995620,
+    "path": "calibration_data\\full_scan_session.bin"
+  },
+  "frame_types": {
+    "0x200c": 49781
+  }
+}
