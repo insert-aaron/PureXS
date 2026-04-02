@@ -498,6 +498,21 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
     }
 
     [RelayCommand]
+    private void OpenPreviewEdit()
+    {
+        if (ReceivedImage is null) return;
+
+        var window = new ImageEditWindow(ReceivedImage, _lastImageBytes);
+        window.Owner = Application.Current.MainWindow;
+        window.ImageApplied += (_, editedImage) =>
+        {
+            ReceivedImage = editedImage;
+            ApplyImageAdjustments();
+        };
+        window.ShowDialog();
+    }
+
+    [RelayCommand]
     private void OpenDicomFolder()
     {
         if (string.IsNullOrEmpty(LastDcmPath)) return;
