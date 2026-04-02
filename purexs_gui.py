@@ -347,6 +347,229 @@ class _ToolTip:
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════
+# ║  Image Preview / Edit Window
+# ╚══════════════════════════════════════════════════════════════════════════════
+
+class ImageEditWindow(ctk.CTkToplevel):
+    """Modal preview/edit window for the captured X-ray image.
+
+    Provides non-destructive adjustment sliders (exposure, contrast,
+    brightness, sharpness) and an invert toggle.  Changes are applied
+    in real-time to the preview and can be saved back to the main
+    canvas or exported as PNG.
+    """
+
+    def __init__(self, parent: ctk.CTk, source_image: Image.Image, **kwargs):
+        super().__init__(parent, **kwargs)
+        self.title("PureXS — Preview / Edit")
+        self.geometry("1200x800")
+        self.minsize(900, 600)
+        self.configure(fg_color="#0D1117")
+        self.transient(parent)
+        self.grab_set()
+
+        self._parent = parent
+        self._source = source_image.copy()
+        self._edited: Image.Image | None = None
+        self._photo: ImageTk.PhotoImage | None = None
+        self._debounce_id: str | None = None
+
+        # ── Layout: image (left ~75%) + sidebar (right ~25%) ──────────
+        self.columnconfigure(0, weight=3)
+        self.columnconfigure(1, weight=0)
+        self.rowconfigure(0, weight=1)
+
+        # Image canvas
+        self._canvas = tk.Canvas(
+            self, bg="#0A0A0A", highlightthickness=0, cursor="crosshair",
+        )
+        self._canvas.grid(row=0, column=0, sticky="nsew", padx=(8, 4), pady=8)
+        self._canvas.bind("<Configure>", lambda e: self._render_preview())
+
+        # ── Right sidebar ─────────────────────────────────────────────
+        sidebar = ctk.CTkFrame(self, width=280, fg_color="#111827", corner_radius=8)
+        sidebar.grid(row=0, column=1, sticky="nsew", padx=(4, 8), pady=8)
+        sidebar.grid_propagate(False)
+
+        # Title
+        ctk.CTkLabel(
+            sidebar, text="Edit Image",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).pack(padx=16, pady=(16, 12))
+
+        # ── Sliders ──────────────────────────────────────────────────
+        self._exposure_var = tk.DoubleVar(value=0.0)
+        self._contrast_var = tk.DoubleVar(value=1.0)
+        self._brightness_var = tk.DoubleVar(value=0.0)
+        self._sharpness_var = tk.DoubleVar(value=0.0)
+
+        sliders = [
+            ("Exposure",   self._exposure_var,   -100, 100),
+            ("Contrast",   self._contrast_var,    0.3, 3.0),
+            ("Brightness", self._brightness_var, -100, 100),
+            ("Sharpness",  self._sharpness_var,   0.0, 3.0),
+        ]
+        for label, var, lo, hi in sliders:
+            frame = ctk.CTkFrame(sidebar, fg_color="transparent")
+            frame.pack(fill="x", padx=16, pady=(4, 0))
+            ctk.CTkLabel(
+                frame, text=label,
+                font=ctk.CTkFont(size=11), text_color="#90A4AE",
+            ).pack(anchor="w")
+            slider = ctk.CTkSlider(
+                frame, from_=lo, to=hi, variable=var,
+                width=220, height=16,
+                command=self._on_slider_changed,
+            )
+            slider.pack(fill="x", pady=(2, 4))
+
+        # ── Invert toggle ────────────────────────────────────────────
+        self._invert_var = tk.BooleanVar(value=False)
+        ctk.CTkSwitch(
+            sidebar, text="Invert",
+            variable=self._invert_var,
+            font=ctk.CTkFont(size=11),
+            command=self._on_slider_changed,
+        ).pack(padx=16, pady=(12, 4), anchor="w")
+
+        # ── Action buttons ───────────────────────────────────────────
+        btn_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=16, pady=(20, 8))
+
+        ctk.CTkButton(
+            btn_frame, text="Reset All", width=120, height=32,
+            font=ctk.CTkFont(size=11),
+            fg_color="#37474F", hover_color="#455A64",
+            command=self._on_reset,
+        ).pack(fill="x", pady=(0, 6))
+
+        ctk.CTkButton(
+            btn_frame, text="Apply & Close", width=120, height=36,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#1565C0", hover_color="#1976D2",
+            command=self._on_apply,
+        ).pack(fill="x", pady=(0, 6))
+
+        ctk.CTkButton(
+            btn_frame, text="Save As PNG", width=120, height=32,
+            font=ctk.CTkFont(size=11),
+            fg_color="#1B5E20", hover_color="#2E7D32",
+            command=self._on_save_png,
+        ).pack(fill="x", pady=(0, 6))
+
+        ctk.CTkButton(
+            btn_frame, text="Cancel", width=120, height=32,
+            font=ctk.CTkFont(size=11),
+            fg_color="#424242", hover_color="#616161",
+            command=self.destroy,
+        ).pack(fill="x")
+
+        # Initial render
+        self.after(50, self._render_preview)
+
+    # ── Image processing ─────────────────────────────────────────────
+
+    def _apply_edits(self) -> Image.Image:
+        """Apply all slider adjustments to the source image."""
+        from PIL import ImageEnhance, ImageFilter
+
+        img = self._source.copy()
+
+        # Exposure (gamma shift)
+        exposure = self._exposure_var.get()
+        if abs(exposure) > 1:
+            arr = np.array(img, dtype=np.float32)
+            # Exposure as EV-style shift: positive = brighter
+            factor = 2.0 ** (exposure / 50.0)
+            arr = np.clip(arr * factor, 0, 255).astype(np.uint8)
+            img = Image.fromarray(arr)
+
+        # Contrast
+        contrast = self._contrast_var.get()
+        if abs(contrast - 1.0) > 0.01:
+            img = ImageEnhance.Contrast(img).enhance(contrast)
+
+        # Brightness (additive offset)
+        brightness = self._brightness_var.get()
+        if abs(brightness) > 1:
+            arr = np.array(img, dtype=np.int16)
+            arr = np.clip(arr + int(brightness), 0, 255).astype(np.uint8)
+            img = Image.fromarray(arr)
+
+        # Sharpness
+        sharpness = self._sharpness_var.get()
+        if sharpness > 0.1:
+            img = ImageEnhance.Sharpness(img).enhance(1.0 + sharpness)
+
+        # Invert
+        if self._invert_var.get():
+            arr = np.array(img)
+            img = Image.fromarray(255 - arr)
+
+        return img
+
+    def _render_preview(self) -> None:
+        """Render the edited image onto the preview canvas."""
+        img = self._apply_edits()
+        self._edited = img
+
+        cw = max(self._canvas.winfo_width(), 400)
+        ch = max(self._canvas.winfo_height(), 300)
+        img_w, img_h = img.size
+        scale = min(cw / img_w, ch / img_h)
+        new_w = max(int(img_w * scale), 1)
+        new_h = max(int(img_h * scale), 1)
+
+        display = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        self._photo = ImageTk.PhotoImage(display)
+
+        self._canvas.delete("all")
+        self._canvas.create_image(
+            cw // 2, ch // 2,
+            image=self._photo, anchor="center",
+        )
+
+    def _on_slider_changed(self, _value=None) -> None:
+        """Debounced re-render on any slider change."""
+        if self._debounce_id is not None:
+            self.after_cancel(self._debounce_id)
+        self._debounce_id = self.after(40, self._render_preview)
+
+    # ── Actions ──────────────────────────────────────────────────────
+
+    def _on_reset(self) -> None:
+        """Reset all sliders to defaults."""
+        self._exposure_var.set(0.0)
+        self._contrast_var.set(1.0)
+        self._brightness_var.set(0.0)
+        self._sharpness_var.set(0.0)
+        self._invert_var.set(False)
+        self._render_preview()
+
+    def _on_apply(self) -> None:
+        """Apply edits to the main canvas and close."""
+        img = self._apply_edits()
+        if hasattr(self._parent, '_display_pil_image'):
+            self._parent._display_pil_image(img)
+        self.destroy()
+
+    def _on_save_png(self) -> None:
+        """Export the edited image as PNG."""
+        img = self._apply_edits()
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            title="Save Edited Image",
+            defaultextension=".png",
+            initialfile=f"purexs_edited_{ts}.png",
+            filetypes=[("PNG", "*.png"), ("All files", "*.*")],
+        )
+        if path:
+            img.save(path)
+            Toast(self._parent, f"Saved: {Path(path).name}", level="info")
+
+
+# ╔══════════════════════════════════════════════════════════════════════════════
 # ║  Main Application
 # ╚══════════════════════════════════════════════════════════════════════════════
 
@@ -961,6 +1184,20 @@ class PureXSApp(ctk.CTk):
         )
         self._canvas.grid(row=0, column=0, sticky="nsew", padx=8, pady=(8, 4))
 
+        # Preview/Edit overlay button (top-right of canvas)
+        self._preview_edit_btn = ctk.CTkButton(
+            self._canvas, text="Preview / Edit", width=110, height=28,
+            font=ctk.CTkFont(size=10, weight="bold"),
+            fg_color="#1565C0", hover_color="#1976D2",
+            corner_radius=6,
+            command=self._on_preview_edit,
+            state="disabled",
+        )
+        # Positioned via canvas window — updated on resize
+        self._preview_edit_btn_win = self._canvas.create_window(
+            0, 0, window=self._preview_edit_btn, anchor="ne",
+        )
+
         # Placeholder text
         self._canvas.bind("<Configure>", self._on_canvas_resize)
 
@@ -1186,6 +1423,14 @@ class PureXSApp(ctk.CTk):
             )
         except tk.TclError:
             pass  # text was deleted (image is displayed)
+
+        # Reposition Preview/Edit button to top-right corner
+        try:
+            self._canvas.coords(
+                self._preview_edit_btn_win, event.width - 12, 12,
+            )
+        except tk.TclError:
+            pass
 
         # Debounce: cancel pending re-render, schedule new one
         if self._resize_debounce_id is not None:
@@ -2957,6 +3202,12 @@ class PureXSApp(ctk.CTk):
 
     # ── Post-display toolbar logic ──────────────────────────────────────
 
+    def _on_preview_edit(self) -> None:
+        """Open the Preview/Edit modal window for the current image."""
+        if self._last_pil_image is None:
+            return
+        ImageEditWindow(self, self._last_pil_image)
+
     def _enable_post_toolbar(self) -> None:
         """Enable brightness/contrast sliders and save buttons after image display."""
         self._brightness_slider.configure(state="normal")
@@ -2965,6 +3216,7 @@ class PureXSApp(ctk.CTk):
         self._save_btn.configure(state="normal")
         self._save_raw_btn.configure(state="normal")
         self._fit_btn.configure(state="normal")
+        self._preview_edit_btn.configure(state="normal")
 
     def _disable_post_toolbar(self) -> None:
         """Disable all post-display toolbar controls."""
@@ -2976,6 +3228,7 @@ class PureXSApp(ctk.CTk):
         self._open_dcm_btn.configure(state="disabled")
         self._view_dcm_btn.configure(state="disabled")
         self._fit_btn.configure(state="disabled")
+        self._preview_edit_btn.configure(state="disabled")
 
     _adjust_debounce_id: str | None = None
 
