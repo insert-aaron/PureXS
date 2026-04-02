@@ -1,5 +1,19 @@
-.DS_Store
+# Calibration data (machine-specific)
+flat_field_norm.npy
+flat_field_raw.bin
+last_scan_raw.bin
+last_scan_calibration.bin
+
+# Python
+*.pyc
 __pycache__/
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+
+# .NET
 bin/
 obj/
 publish/
@@ -8,45 +22,13 @@ releases-staging/
 *.suo
 .vs/
 
-# .NET runtime DLLs (shipped with PureXS.exe, not source)
-*.dll
-*.exe
-*.pdb
-*.deps.json
-*.runtimeconfig.json
-clr*.dll
-host*.dll
-msquic.dll
-vcruntime*.dll
-wpfgfx*.dll
-createdump.exe
-mscor*.dll
-netstandard.dll
-PenImc_cor3.dll
-PresentationNative_cor3.dll
-D3DCompiler_47_cor3.dll
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 
-# Locale resource directories
-cs/
-de/
-es/
-fr/
-it/
-ja/
-ko/
-pl/
-pt-BR/
-ru/
-tr/
-zh-Hans/
-zh-Hant/
-x86/
-
-# Output images
-*.png
-*.tiff
-*.tif
-
-# Large data files
-*.bin
-*.zip
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini

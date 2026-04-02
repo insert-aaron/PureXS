@@ -13,6 +13,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
 {
     private readonly ISironaService _sirona;
     private readonly IPureChartService _pureChart;
+    private readonly IImageProcessingService _imageProcessor;
 
     // ── Machine state ────────────────────────────────────────────────────
     [ObservableProperty]
@@ -81,10 +82,11 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     // ── Constructor ──────────────────────────────────────────────────────
 
-    public MainViewModel(ISironaService sirona, IPureChartService pureChart)
+    public MainViewModel(ISironaService sirona, IPureChartService pureChart, IImageProcessingService imageProcessor)
     {
         _sirona = sirona;
         _pureChart = pureChart;
+        _imageProcessor = imageProcessor;
 
         _sirona.ConnectionStateChanged += OnConnectionStateChanged;
         _sirona.HeartbeatTick += OnHeartbeatTick;
@@ -410,17 +412,43 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         Application.Current.Dispatcher.Invoke(() => HeartbeatPulse = !HeartbeatPulse);
     }
 
-    private void OnImageReceived(object? sender, byte[] imageBytes)
+    private void OnImageReceived(object? sender, byte[] rawBytes)
     {
+        // Process raw scan bytes through the Python decoder pipeline (async)
+        _ = ProcessAndDisplayImageAsync(rawBytes);
+    }
+
+    private async Task ProcessAndDisplayImageAsync(byte[] rawBytes)
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            MachineStatus = "Processing image...";
+            MachineIndicator = new SolidColorBrush(Color.FromRgb(255, 167, 38)); // orange
+            IsExposing = false;
+        });
+
+        // Run the decoder — produces a finished panoramic PNG
+        byte[]? processedBytes = null;
+        try
+        {
+            processedBytes = await _imageProcessor.ProcessRawScanAsync(rawBytes);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[MainVM] Decoder failed: {ex.Message}");
+        }
+
+        // Fall back to raw bytes if decoder is not available or fails
+        var displayBytes = processedBytes ?? rawBytes;
+
         Application.Current.Dispatcher.Invoke(() =>
         {
             try
             {
-                // Store raw bytes for upload
-                _lastImageBytes = imageBytes;
+                _lastImageBytes = displayBytes;
 
                 var bitmap = new BitmapImage();
-                using var ms = new System.IO.MemoryStream(imageBytes);
+                using var ms = new System.IO.MemoryStream(displayBytes);
                 bitmap.BeginInit();
                 bitmap.CacheOption = BitmapCacheOption.OnLoad;
                 bitmap.StreamSource = ms;
@@ -428,11 +456,11 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                 bitmap.Freeze();
                 ReceivedImage = bitmap;
 
-                // Enter review mode
                 IsReviewingImage = true;
-                IsExposing = false;
-                MachineStatus = "Scan complete — review image";
-                MachineIndicator = new SolidColorBrush(Color.FromRgb(79, 195, 247)); // light blue
+                MachineStatus = processedBytes is not null
+                    ? "Scan complete — review image"
+                    : "Scan complete — raw preview (decoder unavailable)";
+                MachineIndicator = new SolidColorBrush(Color.FromRgb(79, 195, 247));
                 ReviewStatus = "Review the image with the patient";
                 ReviewStatusColor = new SolidColorBrush(Color.FromRgb(79, 195, 247));
             }

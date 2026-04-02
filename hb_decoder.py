@@ -2093,11 +2093,17 @@ def reconstruct_image(
             if _ff_norm.shape == (height, width):
                 log.info("Flat-field calibration: loading %s", _FF_PATH)
 
-                # Interpolate known dead rows
+                # Interpolate known dead rows (wide Gaussian-weighted kernel, ±8 rows)
                 for _dr in [426, 853]:
-                    if 2 <= _dr < height - 2:
-                        img_f[_dr, :] = (img_f[_dr - 2, :] * 0.25 + img_f[_dr - 1, :] * 0.25 + img_f[_dr + 1, :] * 0.25 + img_f[_dr + 2, :] * 0.25)
-                        _ff_norm[_dr, :] = (_ff_norm[_dr - 2, :] * 0.25 + _ff_norm[_dr - 1, :] * 0.25 + _ff_norm[_dr + 1, :] * 0.25 + _ff_norm[_dr + 2, :] * 0.25)
+                    if 8 <= _dr < height - 8:
+                        _kern_hw = 8  # half-width
+                        _weights = np.exp(-0.5 * (np.arange(-_kern_hw, _kern_hw + 1) / 3.0) ** 2)
+                        _weights[_kern_hw] = 0  # exclude dead row itself
+                        _weights /= _weights.sum()
+                        _neighbors = np.array([img_f[_dr + k, :] for k in range(-_kern_hw, _kern_hw + 1)])
+                        img_f[_dr, :] = (_weights[:, np.newaxis] * _neighbors).sum(axis=0)
+                        _neighbors_ff = np.array([_ff_norm[_dr + k, :] for k in range(-_kern_hw, _kern_hw + 1)])
+                        _ff_norm[_dr, :] = (_weights[:, np.newaxis] * _neighbors_ff).sum(axis=0)
 
                 # Dark subtraction
                 _dark_pt = np.median(img_f[:, :80], axis=1)
@@ -2118,14 +2124,20 @@ def reconstruct_image(
                 _col_n = _col_t.mean() / np.maximum(_col_t, 1)
                 _corrected = _corrected * _col_n[np.newaxis, :]
 
+                # Fine column normalization (catches die-boundary residual grid)
+                _col_m2 = _corrected[100:min(1100, height), :].mean(axis=0)
+                _col_t2 = _gf1d_ff(_col_m2.astype(np.float64), sigma=30)
+                _col_n2 = _col_t2.mean() / np.maximum(_col_t2, 1)
+                _corrected = _corrected * _col_n2[np.newaxis, :]
+
                 # CLAHE tone mapping on active zone (rows 40-1220)
                 _ACTIVE_TOP, _ACTIVE_BOT = 40, min(1220, height)
                 _active = _corrected[_ACTIVE_TOP:_ACTIVE_BOT, :]
-                _p01 = np.percentile(_active[:, 400:min(width, 2300)], 1)
-                _p999 = np.percentile(_active[:, 400:min(width, 2300)], 96)
+                _p01 = np.percentile(_active[:, 400:min(width, 2300)], 2)
+                _p999 = np.percentile(_active[:, 400:min(width, 2300)], 90)
                 _img16 = np.clip((_active - _p01) / max(_p999 - _p01, 1) * 65535,
                                  0, 65535).astype(np.uint16)
-                _clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(16, 16))
+                _clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(16, 16))
                 _img_clahe = _clahe.apply(_img16)
                 _img8 = 255 - (_img_clahe / 257).astype(np.uint8)
 
@@ -2140,6 +2152,9 @@ def reconstruct_image(
                         (2440, 1280), Image.LANCZOS
                     )
                 )
+
+                # Flip vertically (sensor rows are bottom-to-top)
+                _final = np.flipud(_final)
 
                 # Sharpen
                 _img_pil = Image.fromarray(_final, mode="L")

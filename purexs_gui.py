@@ -1311,8 +1311,8 @@ class PureXSApp(ctk.CTk):
         dx = event.x - self._drag_start_x
         dy = event.y - self._drag_start_y
 
-        self._pan_x = self._drag_pan_x0 + dx / scale
-        self._pan_y = self._drag_pan_y0 + dy / scale
+        self._pan_x = self._drag_pan_x0 - dx / scale
+        self._pan_y = self._drag_pan_y0 - dy / scale
 
         self._render_current_image()
 

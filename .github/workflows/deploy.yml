@@ -1,8 +1,9 @@
-name: Build and Deploy to PureXS-releases
+name: Build and Deploy PureXS
 
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   build-and-deploy:
@@ -12,6 +13,22 @@ jobs:
       - name: Checkout source repo
         uses: actions/checkout@v4
 
+      # ── Validate Python decoder files ─────────────────────────────────
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Validate Python files
+        run: |
+          python -c "import py_compile; py_compile.compile('hb_decoder.py', doraise=True)"
+          python -c "import py_compile; py_compile.compile('purexs_decoder_cli.py', doraise=True)"
+          python -c "import py_compile; py_compile.compile('utils.py', doraise=True)"
+          python -c "import py_compile; py_compile.compile('dicom_export.py', doraise=True)"
+          echo "All Python files compile cleanly"
+        shell: bash
+
+      # ── Build .NET WPF app ────────────────────────────────────────────
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
@@ -33,6 +50,43 @@ jobs:
           --self-contained true
           -o publish/x86
 
+      # ── Bundle Python decoder files into WPF output ───────────────────
+      - name: Bundle Python decoder (x64)
+        run: |
+          mkdir publish\x64\decoder
+          copy hb_decoder.py publish\x64\decoder\
+          copy purexs_decoder_cli.py publish\x64\decoder\
+          copy utils.py publish\x64\decoder\
+          copy dicom_export.py publish\x64\decoder\
+          copy calibration_capture.py publish\x64\decoder\
+          copy requirements-decoder.txt publish\x64\decoder\requirements.txt
+          if exist sidexis_tone_lut.npy copy sidexis_tone_lut.npy publish\x64\decoder\
+          if exist sgf_frame_gain.npy copy sgf_frame_gain.npy publish\x64\decoder\
+        shell: cmd
+
+      - name: Bundle Python decoder (x86)
+        run: |
+          mkdir publish\x86\decoder
+          copy hb_decoder.py publish\x86\decoder\
+          copy purexs_decoder_cli.py publish\x86\decoder\
+          copy utils.py publish\x86\decoder\
+          copy dicom_export.py publish\x86\decoder\
+          copy calibration_capture.py publish\x86\decoder\
+          copy requirements-decoder.txt publish\x86\decoder\requirements.txt
+          if exist sidexis_tone_lut.npy copy sidexis_tone_lut.npy publish\x86\decoder\
+          if exist sgf_frame_gain.npy copy sgf_frame_gain.npy publish\x86\decoder\
+        shell: cmd
+
+      # ── Write version ─────────────────────────────────────────────────
+      - name: Write version.txt
+        run: |
+          VERSION=$(date +"%Y.%m.%d")-$(echo ${{ github.sha }} | cut -c1-7)
+          echo "$VERSION" > publish/x64/version.txt
+          echo "$VERSION" > publish/x86/version.txt
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+        shell: bash
+
+      # ── Deploy to PureXS-releases ─────────────────────────────────────
       - name: Clone PureXS-releases
         run: |
           git clone https://x-access-token:${{ secrets.DEPLOY_TOKEN }}@github.com/${{ github.repository_owner }}/PureXS-releases.git releases-repo
@@ -40,21 +94,20 @@ jobs:
 
       - name: Stage artifacts into releases repo
         run: |
-          # Clear previous binaries but keep SetupAndRun.bat and README.md at root
           cd releases-repo
 
-          # Remove old x64 binaries (everything except .git, x86/, SetupAndRun.bat, README.md)
-          Get-ChildItem -Path . -Exclude '.git','x86','SetupAndRun.bat','README.md' |
+          # Remove old x64 binaries (keep .git, x86/, SetupAndRun.bat, README.md, Assets/)
+          Get-ChildItem -Path . -Exclude '.git','x86','SetupAndRun.bat','README.md','Assets','.gitignore' |
             Where-Object { $_.Name -ne '.git' } |
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
           # Remove old x86 binaries
           if (Test-Path x86) { Remove-Item x86\* -Recurse -Force -ErrorAction SilentlyContinue }
 
-          # Copy new x64 build into root
+          # Copy new x64 build into root (includes decoder/ subdirectory)
           Copy-Item -Path ..\publish\x64\* -Destination . -Recurse -Force
 
-          # Copy new x86 build into x86/
+          # Copy new x86 build into x86/ (includes decoder/ subdirectory)
           New-Item -ItemType Directory -Path x86 -Force | Out-Null
           Copy-Item -Path ..\publish\x86\* -Destination x86\ -Recurse -Force
         shell: pwsh
@@ -62,10 +115,11 @@ jobs:
       - name: Commit and push to PureXS-releases
         run: |
           cd releases-repo
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "PureXS CI"
+          git config user.email "ci@purexs.local"
           git add -A
           git diff --cached --quiet && echo "No changes to deploy" && exit 0
-          git commit -m "Deploy: ${{ github.sha }}"
+          git commit -m "PureXS ${{ env.VERSION }} — ${{ github.event.head_commit.message }}"
           git push origin main
+          echo "Deployed ${{ env.VERSION }}"
         shell: bash

@@ -19,7 +19,8 @@ public partial class App : Application
 
         ISironaService sirona = new SironaService(host, port);
         IPureChartService pureChart = new PureChartService(facilityToken);
-        var viewModel = new MainViewModel(sirona, pureChart);
+        IImageProcessingService imageProcessor = new ImageProcessingService();
+        var viewModel = new MainViewModel(sirona, pureChart, imageProcessor);
         var window = new MainWindow(viewModel);
 
         MainWindow = window;

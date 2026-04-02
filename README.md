@@ -1,118 +1,113 @@
-# PureXS — Sidexis-Free Sirona Orthophos Controller
+# PureXS — Panoramic X-Ray Pipeline
 
-Direct TCP control of Dentsply Sirona Orthophos panoramic x-ray machines,
-replacing Sidexis entirely via reverse-engineered P2K wire protocol.
+Direct TCP control of the Dentsply Sirona Orthophos XG. Reconstructs clinical-quality panoramic dental X-rays from raw detector data without Sidexis.
 
-## Quick Start
+## Architecture
 
-### Windows
-1. Install [Python 3.11+](https://www.python.org/downloads/) (check **Add Python to PATH**)
-2. Double-click `install_windows.bat`
-3. Double-click `purexs_launcher.pyw` (no terminal window)
-
-### macOS / Linux
-```bash
-bash install_mac.sh
-python3 purexs_launcher.py
+```
+PureXS.exe (WPF/.NET 8)              decoder/ (Python)
+  GUI, TCP client, PureChart            Image reconstruction pipeline
+       |                                     |
+       |-- Connect to Orthophos XG          |-- hb_decoder.py
+       |-- Heartbeat keep-alive             |-- purexs_decoder_cli.py
+       |-- Receive raw scan bytes           |-- utils.py
+       |-- Call decoder subprocess -------->|-- dicom_export.py
+       |-- Display processed PNG            |-- calibration_capture.py
+       |-- Upload to PureChart              |-- requirements.txt
+       |                                     |-- *.npy lookup tables
 ```
 
-## Features
+### Bridge Pattern
 
-| Feature | Description |
+The WPF app handles the GUI and device communication. After receiving raw scan bytes, it writes them to a temp file and calls the Python decoder as a subprocess:
+
+```
+Raw bytes -> temp.bin -> python purexs_decoder_cli.py --input temp.bin --output pano.png -> display PNG
+```
+
+This keeps the imaging pipeline in Python (easy to iterate) while the GUI stays in WPF (native Windows look).
+
+### Two-Repo Pattern
+
+| Repo | Purpose |
 |---|---|
-| **HB Monitor** | Live heartbeat (0x200B/200C) at 0.1s intervals, RTT gauge |
-| **Expose** | Direct trigger (`ff 12 01 03 42 0e 01`), 4s panoramic scan |
-| **kV Gauge** | Real-time tube voltage display (70.0 kV peak) |
-| **Patient Workflow** | Name/DOB/ID entry, expose gating, auto-named output files |
-| **DICOM Export** | DX SOP class (1.2.840.10008.5.1.4.1.1.1.1), verified tags |
-| **Patient History** | Searchable history view with PNG/DICOM/log file launchers |
-| **Live Test Suite** | 5-test hardware validation (`python live_test.py`) |
-| **Replay Mode** | Offline validation from Wireshark dumps (`--replay ff.txt`) |
+| `insert-aaron/PureXS` | Source code (.NET + Python) |
+| `insert-aaron/PureXS-releases` | Deployed files — WPF binaries + Python decoder + SetupAndRun.bat |
 
-## Network Setup
-
-| Role | Address |
-|---|---|
-| Sirona Orthophos | `192.168.139.170:12837` |
-| PC (any) | `192.168.139.x` subnet |
-
-The PC must be on the same subnet as the Orthophos.
-No Sidexis installation, DLLs, or licensing required.
-
-## Files
+### Deployment Flow
 
 ```
-PureXS/
-  purexs_gui.py          GUI (CustomTkinter, dark mode)
-  hb_decoder.py          P2K protocol decoder + live TCP client
-  dicom_export.py        DICOM DX export (pydicom)
-  history.py             Patient history viewer
-  purexs_launcher.py     Zero-terminal launcher
-  purexs_launcher.pyw    Windows no-console launcher (same file)
-  live_test.py           Hardware test suite (5 tests)
-  utils.py               Cross-platform path + file-open helpers
-  requirements.txt       Python dependencies
-  install_windows.bat    Windows one-click installer
-  install_mac.sh         macOS/Linux installer
+Push to PureXS main
+        |
+CI builds WPF (x64 + x86), bundles Python decoder files
+        |
+Deploys to PureXS-releases
+        |
+Clinic PC shortcut -> SetupAndRun.bat
+        |
+git fetch + hash compare -> git reset --hard if new version
+        |
+Installs Python (embedded) + pip deps if needed
+        |
+Launches PureXS.exe
 ```
 
-## Data Storage
+## Development
 
-All patient data, logs, and config are stored in:
-- **Windows:** `%APPDATA%\PureXS\` (`C:\Users\{you}\AppData\Roaming\PureXS\`)
-- **macOS/Linux:** `~/.purexs/`
+### Prerequisites
+- .NET 8 SDK
+- Python 3.9+ (for testing the decoder locally)
 
-```
-PureXS/                         (or ~/.purexs/)
-  logs/                         GUI session logs
-  events.log                    All expose events
-  recent_patients.json          Last 10 patients (quick-fill)
-  patients/
-    {PatientID}/
-      sessions.json             Append-only scan history
-      Smith_John_..._panoramic.png
-      Smith_John_..._panoramic.dcm
-      Smith_John_..._events.log
-```
+### Deploy Methods
 
-## Hardware Test
+**1. GitHub Actions CI (automatic)**
+Every push to `main` triggers `.github/workflows/deploy.yml`:
+- Builds WPF app (x64 + x86, self-contained)
+- Bundles Python decoder files into `decoder/` subdirectory
+- Pushes to PureXS-releases
 
+Requires `DEPLOY_TOKEN` secret (GitHub PAT with repo write access to PureXS-releases).
+
+**2. Manual from Mac**
 ```bash
-# Against real hardware (prompts before firing x-ray)
-python live_test.py --host 192.168.139.170
-
-# Offline replay from Wireshark capture
-python live_test.py --replay ff.txt
-
-# Skip expose test (connection + HB + DICOM only)
-python live_test.py --skip-expose
+chmod +x build-and-deploy.sh
+./build-and-deploy.sh "Fixed dead row interpolation"
 ```
 
-## Protocol Reference
+### Key Files
 
-Reverse-engineered from SiNet2.dll, SiPanCtl.dll, and Wireshark captures.
-
-| Element | Wire Format |
+| File | Purpose |
 |---|---|
-| Session header | 20 bytes BE: `[func_hi func_lo 07 2D 07 D0 00 01 00 0E ...]` |
-| HB request | func `0x200B`, 20 bytes |
-| HB response | func `0x200C`, 20 bytes, RTT 1.6-2.4ms |
-| Expose trigger | `ff 12 01 03 42 0e 01` |
-| kV ramp record | 15 bytes: `[01 KV_HI KV_LO 01 ... 0E 01]` |
-| Scanline header | `[01 ID 00 01 00 F0 00 34]` + 240 x uint16 BE pixels |
-| Post-scan error | `E7 14 02 (ERR_SIDEXIS_API)` — normal, triggers reconnect |
+| `PureXS.WPF/` | WPF app — GUI, TCP client, PureChart |
+| `hb_decoder.py` | Image reconstruction pipeline |
+| `purexs_decoder_cli.py` | CLI entry point for decoder (called by WPF) |
+| `utils.py` | Shared utilities |
+| `dicom_export.py` | DICOM file generation |
+| `requirements-decoder.txt` | Python dependencies for the decoder |
+| `build-and-deploy.sh` | Manual Mac deploy script |
+| `.github/workflows/deploy.yml` | CI auto-deploy |
 
-## PyInstaller (optional)
+## Machine-Specific (not in repo)
 
-Build a single `.exe` on Windows (no Python install needed for end users):
+| File | Location on Clinic PC | Purpose |
+|---|---|---|
+| `flat_field_norm.npy` | `C:\PureXS\` | 2D flat-field calibration map |
+| `flat_field_raw.bin` | `C:\PureXS\` | Raw air-scan backup |
 
-```bash
-pip install pyinstaller
-pyinstaller --onefile --windowed --name PureXS purexs_launcher.py
-```
+These are generated per-machine. The `.gitignore` excludes them so `git reset --hard` never overwrites calibration data.
 
-Output: `dist/PureXS.exe`
+## Setting Up a New Clinic
 
-## License
+1. Create `PureXS-releases` repo on GitHub (if not exists)
+2. Push built files + `SetupAndRun.bat`
+3. On clinic PC: download and double-click `SetupAndRun.bat`
+4. It installs Git, embedded Python, pip deps, clones the repo, creates desktop shortcut
+5. Capture flat-field: run blank air exposure with empty chair
+6. Verify `C:\PureXS\flat_field_norm.npy` exists
+7. Test with a patient scan
 
-MIT
+## Setting Up CI
+
+1. Create a GitHub Personal Access Token with `repo` scope
+2. In PureXS source repo -> Settings -> Secrets -> `DEPLOY_TOKEN`
+3. Push to `main` -> CI builds and deploys
