@@ -102,6 +102,38 @@
             </Setter>
         </Style>
 
+        <!-- Toolbar button style -->
+        <Style x:Key="ToolbarButtonStyle" TargetType="Button">
+            <Setter Property="Foreground" Value="#E0E0E0" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="12,8" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border"
+                                Background="#37474F"
+                                CornerRadius="6"
+                                Padding="{TemplateBinding Padding}"
+                                BorderBrush="#455A64"
+                                BorderThickness="1">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="#455A64" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="border" Property="Background" Value="#2A2A3A" />
+                                <Setter Property="Foreground" Value="#5A5A6A" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- Heartbeat pulse animation -->
         <Storyboard x:Key="PulseAnimation">
             <DoubleAnimation Storyboard.TargetName="HeartbeatDot"
@@ -111,6 +143,7 @@
         </Storyboard>
     </Window.Resources>
 
+    <Grid>
     <DockPanel>
         <!-- ── Bottom Status Bar ─────────────────────────────────────────── -->
         <Border DockPanel.Dock="Bottom"
@@ -372,11 +405,24 @@
                     BorderThickness="1">
                 <StackPanel>
                     <!-- Logo / Title -->
-                    <TextBlock Text="PureXS"
-                               Foreground="White"
-                               FontSize="32"
-                               FontWeight="Bold"
-                               Margin="0,0,0,4" />
+                    <Grid Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="PureXS"
+                                   Foreground="White"
+                                   FontSize="32"
+                                   FontWeight="Bold" />
+                        <Button Grid.Column="1"
+                                Content="History"
+                                Command="{Binding OpenHistoryCommand}"
+                                Style="{StaticResource ActionButtonStyle}"
+                                FontSize="11"
+                                Padding="10,6"
+                                VerticalAlignment="Center" />
+                    </Grid>
                     <TextBlock Text="ORTHOPHOS XG Controller"
                                Foreground="{StaticResource TextSecondary}"
                                FontSize="12"
@@ -525,6 +571,24 @@
 
                     <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,0,0,20" />
 
+                    <!-- ── Exam Type Selector ─────────────────────────────── -->
+                    <TextBlock Text="EXAM TYPE"
+                               Foreground="{StaticResource TextSecondary}"
+                               FontSize="11"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,8" />
+                    <ComboBox ItemsSource="{Binding ExamTypeOptions}"
+                              SelectedItem="{Binding SelectedExamType}"
+                              Background="#111128"
+                              Foreground="#E0E0E0"
+                              BorderBrush="#2A2A4A"
+                              BorderThickness="1"
+                              Padding="8,6"
+                              FontSize="12"
+                              Margin="0,0,0,20" />
+
+                    <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,0,0,20" />
+
                     <!-- ── EXPOSE Button ───────────────────────────────────── -->
                     <Button Content="EXPOSE"
                             Command="{Binding ExposeCommand}"
@@ -562,11 +626,9 @@
                                Margin="0,0,0,14" />
 
                     <!-- Image area -->
-                    <Border Grid.Row="1"
-                            Background="#0D0D1A"
-                            CornerRadius="8"
-                            BorderBrush="{StaticResource BorderBrush}"
-                            BorderThickness="1">
+                    <Border Grid.Row="1" Background="#0D0D1A" CornerRadius="8"
+                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                            ClipToBounds="True" x:Name="ImageContainer">
                         <Grid>
                             <!-- Placeholder when no image -->
                             <StackPanel VerticalAlignment="Center"
@@ -584,10 +646,33 @@
                                            Margin="0,10,0,0" />
                             </StackPanel>
 
-                            <!-- X-ray image -->
-                            <Image Source="{Binding ReceivedImage}"
+                            <!-- Interactive image viewer -->
+                            <Image x:Name="XrayImage"
+                                   Source="{Binding DisplayImage}"
                                    Stretch="Uniform"
-                                   Margin="10" />
+                                   RenderTransformOrigin="0.5,0.5">
+                                <Image.RenderTransform>
+                                    <TransformGroup>
+                                        <ScaleTransform x:Name="ImageScale"
+                                                       ScaleX="{Binding ZoomLevel}"
+                                                       ScaleY="{Binding ZoomLevel}" />
+                                        <TranslateTransform x:Name="ImageTranslate"
+                                                           X="{Binding PanX}"
+                                                           Y="{Binding PanY}" />
+                                    </TransformGroup>
+                                </Image.RenderTransform>
+                            </Image>
+
+                            <!-- Zoom percentage overlay -->
+                            <TextBlock Text="{Binding ZoomPercentText}"
+                                       Foreground="{StaticResource TextSecondary}"
+                                       FontSize="11"
+                                       FontFamily="Consolas"
+                                       Background="#99111128"
+                                       Padding="6,3"
+                                       HorizontalAlignment="Right"
+                                       VerticalAlignment="Bottom"
+                                       Margin="0,0,8,8" />
                         </Grid>
                     </Border>
 
@@ -603,11 +688,13 @@
                                        HorizontalAlignment="Center"
                                        Margin="0,0,0,12" />
 
-                            <!-- Confirm + Retake buttons -->
+                            <!-- Confirm + Retry + Retake buttons -->
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="8" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
 
@@ -643,8 +730,43 @@
                                     </Button.Template>
                                 </Button>
 
-                                <!-- Retake -->
+                                <!-- Retry Upload (visible only when upload failed) -->
                                 <Button Grid.Column="2"
+                                        Content="Retry Upload"
+                                        Command="{Binding RetryUploadCommand}"
+                                        Padding="16,12"
+                                        FontSize="14"
+                                        FontWeight="SemiBold"
+                                        Foreground="White"
+                                        Cursor="Hand"
+                                        Visibility="{Binding IsUploadFailed, Converter={StaticResource BoolToVis}}">
+                                    <Button.Template>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border x:Name="border"
+                                                    Background="#E65100"
+                                                    CornerRadius="8"
+                                                    Padding="{TemplateBinding Padding}"
+                                                    BorderBrush="#FF6D00"
+                                                    BorderThickness="2">
+                                                <ContentPresenter HorizontalAlignment="Center"
+                                                                  VerticalAlignment="Center" />
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="border" Property="Background" Value="#FF6D00" />
+                                                </Trigger>
+                                                <Trigger Property="IsEnabled" Value="False">
+                                                    <Setter TargetName="border" Property="Background" Value="#2A2A3A" />
+                                                    <Setter TargetName="border" Property="BorderBrush" Value="#4A4A5A" />
+                                                    <Setter Property="Foreground" Value="#5A5A6A" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Button.Template>
+                                </Button>
+
+                                <!-- Retake -->
+                                <Button Grid.Column="4"
                                         Content="Retake"
                                         Command="{Binding RetakeCommand}"
                                         Padding="16,12"
@@ -674,10 +796,140 @@
                                     </Button.Template>
                                 </Button>
                             </Grid>
+
+                            <!-- ── Post-Expose Toolbar ────────────────────── -->
+                            <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,14,0,14" />
+
+                            <!-- Brightness -->
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="70" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0"
+                                           Text="Brightness"
+                                           Foreground="{StaticResource TextSecondary}"
+                                           FontSize="11"
+                                           VerticalAlignment="Center" />
+                                <Slider Grid.Column="1"
+                                        Minimum="-80" Maximum="80"
+                                        Value="{Binding Brightness}"
+                                        Foreground="#4FC3F7"
+                                        VerticalAlignment="Center" />
+                            </Grid>
+
+                            <!-- Contrast -->
+                            <Grid Margin="0,0,0,14">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="70" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0"
+                                           Text="Contrast"
+                                           Foreground="{StaticResource TextSecondary}"
+                                           FontSize="11"
+                                           VerticalAlignment="Center" />
+                                <Slider Grid.Column="1"
+                                        Minimum="0.3" Maximum="3.0"
+                                        Value="{Binding Contrast}"
+                                        TickFrequency="0.1"
+                                        IsSnapToTickEnabled="False"
+                                        Foreground="#4FC3F7"
+                                        VerticalAlignment="Center" />
+                            </Grid>
+
+                            <!-- Action buttons row -->
+                            <WrapPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                <Button Content="Reset"
+                                        Command="{Binding ResetAdjustmentsCommand}"
+                                        Style="{StaticResource ToolbarButtonStyle}"
+                                        Margin="0,0,8,0" />
+                                <Button Content="Fit"
+                                        Command="{Binding FitToCanvasCommand}"
+                                        Style="{StaticResource ToolbarButtonStyle}"
+                                        Margin="0,0,8,0" />
+                                <Button Content="Save PNG"
+                                        Command="{Binding SavePngCommand}"
+                                        Style="{StaticResource ToolbarButtonStyle}"
+                                        Margin="0,0,8,0" />
+                                <Button Content="New Patient"
+                                        Command="{Binding NewPatientCommand}"
+                                        Style="{StaticResource ToolbarButtonStyle}" />
+                            </WrapPanel>
                         </StackPanel>
                     </Border>
                 </Grid>
             </Border>
         </Grid>
     </DockPanel>
+
+    <!-- ── Toast Notification Overlay ──────────────────────────────────── -->
+    <ItemsControl ItemsSource="{Binding ActiveToasts}"
+                  IsHitTestVisible="False"
+                  HorizontalAlignment="Right"
+                  VerticalAlignment="Bottom"
+                  Margin="0,0,24,24">
+        <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+                <StackPanel Orientation="Vertical" />
+            </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+            <DataTemplate>
+                <Border x:Name="ToastBorder"
+                        CornerRadius="8"
+                        Padding="16,10"
+                        Margin="0,0,0,8"
+                        MinWidth="260"
+                        MaxWidth="400"
+                        Opacity="0"
+                        RenderTransformOrigin="0.5,0.5">
+                    <Border.RenderTransform>
+                        <TranslateTransform X="40" />
+                    </Border.RenderTransform>
+                    <Border.Triggers>
+                        <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                            <BeginStoryboard>
+                                <Storyboard>
+                                    <!-- Slide in from right -->
+                                    <DoubleAnimation Storyboard.TargetName="ToastBorder"
+                                                     Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)"
+                                                     From="40" To="0"
+                                                     Duration="0:0:0.25"
+                                                     DecelerationRatio="0.6" />
+                                    <!-- Fade in -->
+                                    <DoubleAnimation Storyboard.TargetName="ToastBorder"
+                                                     Storyboard.TargetProperty="Opacity"
+                                                     From="0" To="0.95"
+                                                     Duration="0:0:0.25" />
+                                </Storyboard>
+                            </BeginStoryboard>
+                        </EventTrigger>
+                    </Border.Triggers>
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Background" Value="#2196F3" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Level}" Value="success">
+                                    <Setter Property="Background" Value="#4CAF50" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding Level}" Value="warning">
+                                    <Setter Property="Background" Value="#FF9800" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding Level}" Value="error">
+                                    <Setter Property="Background" Value="#F44336" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <TextBlock Text="{Binding Message}"
+                               Foreground="White"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               TextWrapping="Wrap" />
+                </Border>
+            </DataTemplate>
+        </ItemsControl.ItemTemplate>
+    </ItemsControl>
+    </Grid>
 </Window>

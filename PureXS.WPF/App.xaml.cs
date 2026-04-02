@@ -20,7 +20,11 @@ public partial class App : Application
         ISironaService sirona = new SironaService(host, port);
         IPureChartService pureChart = new PureChartService(facilityToken);
         IImageProcessingService imageProcessor = new ImageProcessingService();
-        var viewModel = new MainViewModel(sirona, pureChart, imageProcessor);
+        IPatientOutputService patientOutput = new PatientOutputService();
+        IToastService toast = new ToastService();
+        IEventLogService log = new EventLogService();
+        IDicomExportService dicom = new DicomExportService();
+        var viewModel = new MainViewModel(sirona, pureChart, imageProcessor, toast, log, patientOutput, dicom);
         var window = new MainWindow(viewModel);
 
         MainWindow = window;
