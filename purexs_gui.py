@@ -425,6 +425,7 @@ class PureXSApp(ctk.CTk):
         self._expose_kv_peak: float = 0.0   # peak kV seen this expose
         self._expose_start_time: float = 0.0
         self._pano_photo: ImageTk.PhotoImage | None = None  # prevent GC
+        self._processing_mode: str = "clean"  # "clean" or "full"
         self._last_dcm_path: str = ""     # path to last exported .dcm
         self._no_response_timer_id: str | None = None  # 2s no-response watchdog
         self._got_kv_or_scanline: bool = False          # cleared each expose
@@ -1030,6 +1031,16 @@ class PureXSApp(ctk.CTk):
         # Hidden ref to avoid crashes on existing .configure() calls
         self._save_raw_btn = ctk.CTkButton(toolbar_btns, text="", width=0, height=0)
 
+        # Processing mode toggle
+        self._mode_var = tk.StringVar(value="clean")
+        self._mode_seg = ctk.CTkSegmentedButton(
+            toolbar_btns, values=["Clean", "Full"],
+            variable=self._mode_var,
+            command=self._on_processing_mode_changed,
+            font=ctk.CTkFont(size=9), height=26, width=120,
+        )
+        self._mode_seg.set("Clean")
+        self._mode_seg.pack(side="left", padx=(0, 4))
 
         self._open_dcm_btn = ctk.CTkButton(
             toolbar_btns, text="DICOM Folder", width=100, height=28,
@@ -2883,10 +2894,11 @@ class PureXSApp(ctk.CTk):
         # Run heavy reconstruct on background thread
         scanlines = list(self._expose_scanlines)
         repair_mask = getattr(self._sirona_client, '_repair_mask', None) if self._sirona_client else None
+        mode = self._processing_mode
 
         def _do():
             try:
-                img = reconstruct_image(scanlines, repair_mask=repair_mask)
+                img = reconstruct_image(scanlines, repair_mask=repair_mask, mode=mode)
                 self.after(0, self._on_stitch_done, img, None)
             except Exception as exc:
                 self.after(0, self._on_stitch_done, None, exc)
@@ -3000,12 +3012,19 @@ class PureXSApp(ctk.CTk):
         if self._last_pil_image is not None:
             self._render_current_image()
 
+    def _on_processing_mode_changed(self, value: str) -> None:
+        """Re-process the current scanlines when the user toggles Clean/Full."""
+        self._processing_mode = value.lower()
+        self._log(f"Processing mode: {value}", "info")
+        if self._expose_scanlines and HAS_HB_DECODER:
+            self._stitch_panoramic()
+
     def _on_save_panoramic(self) -> None:
         """Save the stitched panoramic image."""
         if not self._expose_scanlines or not HAS_HB_DECODER:
             return
 
-        img = reconstruct_image(self._expose_scanlines)
+        img = reconstruct_image(self._expose_scanlines, mode=self._processing_mode)
         if img is None:
             Toast(self, "No panoramic to save", level="warning")
             return
@@ -3171,7 +3190,7 @@ class PureXSApp(ctk.CTk):
             Toast(self, "No image data for fallback view", level="warning")
             return
 
-        img = reconstruct_image(self._expose_scanlines)
+        img = reconstruct_image(self._expose_scanlines, mode=self._processing_mode)
         if img is None:
             return
 
@@ -3482,7 +3501,7 @@ class PureXSApp(ctk.CTk):
         # 1. Save panoramic PNG
         pano_filename = ""
         if self._expose_scanlines and HAS_HB_DECODER:
-            img = reconstruct_image(self._expose_scanlines)
+            img = reconstruct_image(self._expose_scanlines, mode=self._processing_mode)
             if img is not None:
                 pano_filename = f"{prefix}_panoramic.png"
                 pano_path = outdir / pano_filename
