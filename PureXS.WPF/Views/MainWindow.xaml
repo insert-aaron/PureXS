@@ -599,6 +599,65 @@
                                FontSize="11"
                                HorizontalAlignment="Center"
                                Margin="0,8,0,0" />
+
+                    <!-- ── kV Gauge (visible during expose) ──────────────────── -->
+                    <Border Margin="0,20,0,0"
+                            Background="#111128"
+                            CornerRadius="6"
+                            Padding="12,8"
+                            Visibility="{Binding IsKvActive, Converter={StaticResource BoolToVis}}">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,6">
+                                <TextBlock Text="{Binding KvDisplayText}"
+                                           Foreground="#4FC3F7"
+                                           FontSize="18"
+                                           FontWeight="Bold"
+                                           FontFamily="Consolas"
+                                           HorizontalAlignment="Left" />
+                                <TextBlock Foreground="{StaticResource TextSecondary}"
+                                           FontSize="10"
+                                           HorizontalAlignment="Right"
+                                           VerticalAlignment="Bottom">
+                                    <Run Text="Peak: " />
+                                    <Run Text="{Binding KvPeak, StringFormat='{}{0:F1}'}" />
+                                    <Run Text=" kV" />
+                                </TextBlock>
+                            </Grid>
+                            <ProgressBar Height="6"
+                                         Value="{Binding KvGaugePercent}"
+                                         Minimum="0" Maximum="1"
+                                         Foreground="#4FC3F7"
+                                         Background="#2A2A4A" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- ── Scanline Preview (visible during expose) ──────────── -->
+                    <Border Margin="0,12,0,0"
+                            Background="#0A0A0A"
+                            CornerRadius="6"
+                            Padding="4"
+                            Visibility="{Binding IsKvActive, Converter={StaticResource BoolToVis}}">
+                        <StackPanel>
+                            <Grid Margin="4,2,4,4">
+                                <TextBlock Text="Scanline Preview"
+                                           Foreground="{StaticResource TextSecondary}"
+                                           FontSize="10"
+                                           FontWeight="SemiBold"
+                                           HorizontalAlignment="Left" />
+                                <TextBlock Foreground="{StaticResource TextSecondary}"
+                                           FontSize="10"
+                                           FontFamily="Consolas"
+                                           HorizontalAlignment="Right">
+                                    <Run Text="{Binding ScanlineCount, Mode=OneWay}" />
+                                    <Run Text=" lines" />
+                                </TextBlock>
+                            </Grid>
+                            <Image Source="{Binding ScanlinePreviewImage}"
+                                   Height="150"
+                                   Stretch="Uniform"
+                                   RenderOptions.BitmapScalingMode="HighQuality" />
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
             </Border>
 

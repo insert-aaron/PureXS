@@ -55,6 +55,28 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     public double ScanProgressMB => ScanByteCount / 1_048_576.0;
 
+    // ── Live kV gauge state ─────────────────────────────────────────────
+    [ObservableProperty]
+    private double _currentKv;
+
+    [ObservableProperty]
+    private double _kvPeak;
+
+    [ObservableProperty]
+    private bool _isKvActive;
+
+    public string KvDisplayText => CurrentKv > 0 ? $"kV: {CurrentKv:F1}" : "kV: --";
+    public double KvGaugePercent => Math.Clamp(CurrentKv / 90.0, 0, 1); // Max 90 kV
+
+    // ── Live scanline preview state ─────────────────────────────────────
+    [ObservableProperty]
+    private int _scanlineCount;
+
+    [ObservableProperty]
+    private BitmapSource? _scanlinePreviewImage;
+
+    private readonly List<ScanlineData> _scanlines = [];
+
     // ── Image review state ───────────────────────────────────────────────
     [ObservableProperty]
     private BitmapSource? _receivedImage;
@@ -173,6 +195,8 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         _sirona.HeartbeatTick += OnHeartbeatTick;
         _sirona.ImageReceived += OnImageReceived;
         _sirona.ScanProgress += OnScanProgress;
+        _sirona.KvChanged += OnKvChanged;
+        _sirona.ScanlineReceived += OnScanlineReceived;
 
         _log.Log("PureXS application started");
         _ = AutoConnectAsync();
@@ -230,6 +254,13 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             IsScanInProgress = true;
             ScanByteCount = 0;
             ScanProgressText = "Waiting for scan data...";
+            // Reset live kV + scanline state
+            CurrentKv = 0;
+            KvPeak = 0;
+            IsKvActive = false;
+            _scanlines.Clear();
+            ScanlineCount = 0;
+            ScanlinePreviewImage = null;
             _log.Log($"Expose started for patient {SelectedPatient?.Id}, exam={SelectedExamType}");
             _toast.Show("Exposure started", "info", 2000);
             await _sirona.ExposeAsync();
@@ -803,6 +834,79 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(ScanProgressMB));
     }
 
+    partial void OnCurrentKvChanged(double value)
+    {
+        OnPropertyChanged(nameof(KvDisplayText));
+        OnPropertyChanged(nameof(KvGaugePercent));
+    }
+
+    private void OnKvChanged(object? sender, double kv)
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            CurrentKv = kv;
+            if (kv > KvPeak) KvPeak = kv;
+            IsKvActive = true;
+        });
+    }
+
+    private void OnScanlineReceived(object? sender, ScanlineData scanline)
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            _scanlines.Add(scanline);
+            ScanlineCount = _scanlines.Count;
+            RenderScanlinePreview();
+        });
+    }
+
+    /// <summary>
+    /// Renders accumulated scanlines as a panoramic preview (2nd-98th percentile stretch).
+    /// Mirrors the scanline preview from purexs_gui.py.
+    /// </summary>
+    private void RenderScanlinePreview()
+    {
+        if (_scanlines.Count == 0) return;
+
+        var nCols = _scanlines.Count;
+        var nRows = _scanlines[0].PixelCount;
+        if (nRows == 0) return;
+
+        // Build uint16 array and find percentiles for contrast stretch
+        var allValues = new List<ushort>(nCols * nRows);
+        foreach (var sl in _scanlines)
+            foreach (var px in sl.Pixels)
+                if (px > 0) allValues.Add(px);
+
+        if (allValues.Count == 0) return;
+
+        allValues.Sort();
+        var low = (double)allValues[(int)(allValues.Count * 0.02)];
+        var high = (double)allValues[(int)(allValues.Count * 0.98)];
+        if (high <= low) high = low + 1;
+
+        // Build 8-bit grayscale pixel array (row-major, 1 byte per pixel)
+        var pixels = new byte[nRows * nCols];
+        for (var col = 0; col < nCols; col++)
+        {
+            var sl = _scanlines[col];
+            var count = Math.Min(sl.PixelCount, nRows);
+            for (var row = 0; row < count; row++)
+            {
+                var val = Math.Clamp((sl.Pixels[row] - low) / (high - low), 0, 1);
+                pixels[row * nCols + col] = (byte)(val * 255);
+            }
+        }
+
+        // Create WPF BitmapSource (Gray8)
+        var bmp = BitmapSource.Create(
+            nCols, nRows, 96, 96,
+            PixelFormats.Gray8, null,
+            pixels, nCols);
+        bmp.Freeze();
+        ScanlinePreviewImage = bmp;
+    }
+
     private void OnImageReceived(object? sender, byte[] rawBytes)
     {
         // Process raw scan bytes through the Python decoder pipeline (async)
@@ -951,6 +1055,8 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         _sirona.HeartbeatTick -= OnHeartbeatTick;
         _sirona.ImageReceived -= OnImageReceived;
         _sirona.ScanProgress -= OnScanProgress;
+        _sirona.KvChanged -= OnKvChanged;
+        _sirona.ScanlineReceived -= OnScanlineReceived;
         _log.Log("PureXS application shutting down");
         await _sirona.DisposeAsync();
         if (_pureChart is IDisposable disposable)

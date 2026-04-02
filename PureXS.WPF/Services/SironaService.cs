@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Net.Sockets;
 using PureXS.Models;
 
@@ -15,6 +16,13 @@ public sealed class SironaService : ISironaService
     private static readonly byte[] ExposePacket = [0xFF, 0x12, 0x01, 0x03, 0x42, 0x0E, 0x01];
     private static readonly byte[] PostScanDisconnect = [0xE7, 0x14, 0x02];
 
+    // Live parsing markers (matching Python hb_decoder.py constants)
+    private static readonly byte[] ScanlineMarker = [0x00, 0x01, 0x00, 0xF0]; // pixel_count = 240
+    private const int ScanlinePixels = 240;
+    private const int KvRecordSize = 15;
+    private const byte KvRecordEndByte1 = 0x0E;
+    private const byte KvRecordEndByte2 = 0x01;
+
     private const int HeartbeatIntervalMs = 100;
     private const int ReconnectHeartbeatGate = 10;
 
@@ -31,6 +39,11 @@ public sealed class SironaService : ISironaService
     private readonly SironaSession _session = new();
     private ConnectionState _state = ConnectionState.Disconnected;
 
+    // Live parsing state — tracks how far we've scanned the image buffer
+    private int _kvParseOffset;
+    private int _scanlineParseOffset;
+    private double _lastKvFired;
+
     // ── Events ──────────────────────────────────────────────────────────────
 
     /// <inheritdoc />
@@ -44,6 +57,9 @@ public sealed class SironaService : ISironaService
 
     /// <inheritdoc />
     public event EventHandler<double>? KvChanged;
+
+    /// <inheritdoc />
+    public event EventHandler<ScanlineData>? ScanlineReceived;
 
     /// <inheritdoc />
     public event EventHandler<int>? ScanProgress;
@@ -124,6 +140,9 @@ public sealed class SironaService : ISironaService
 
         _session.IsExposing = true;
         _session.ImageBuffer.Clear();
+        _kvParseOffset = 0;
+        _scanlineParseOffset = 0;
+        _lastKvFired = 0;
         SetState(ConnectionState.Exposing);
 
         await _stream.WriteAsync(ExposePacket, ct);
@@ -238,9 +257,11 @@ public sealed class SironaService : ISironaService
                 {
                     _session.ImageBuffer.AddRange(data.Span.ToArray());
                     ScanProgress?.Invoke(this, _session.ImageBuffer.Count);
-                }
 
-                // TODO: Parse kV ramp packets and raise KvChanged
+                    // Live parsing: extract kV samples and scanlines from accumulated buffer
+                    ParseLiveKvSamples();
+                    ParseLiveScanlines();
+                }
             }
         }
         catch (OperationCanceledException) { /* Normal shutdown */ }
@@ -299,6 +320,126 @@ public sealed class SironaService : ISironaService
         }
 
         SetState(ConnectionState.Disconnected);
+    }
+
+    // ── Live stream parsing ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Scans the image buffer (from the last parsed offset) for kV ramp records.
+    /// Each record is 15 bytes ending with [0x0E, 0x01]. The kV value is a
+    /// big-endian uint16 at offset +1 from the record start, divided by 10.
+    /// </summary>
+    private void ParseLiveKvSamples()
+    {
+        var buf = _session.ImageBuffer;
+        // Need at least KvRecordSize bytes beyond our offset
+        while (_kvParseOffset + KvRecordSize <= buf.Count)
+        {
+            // Search for end marker [0x0E, 0x01]
+            var found = false;
+            for (var i = _kvParseOffset + KvRecordSize - 3; i < buf.Count - 1; i++)
+            {
+                if (buf[i] == KvRecordEndByte1 && buf[i + 1] == KvRecordEndByte2)
+                {
+                    // Record starts 12 bytes before the 0x0E byte
+                    var recordStart = i - 12;
+                    if (recordStart < _kvParseOffset || recordStart < 0)
+                    {
+                        _kvParseOffset = i + 2;
+                        found = true;
+                        break;
+                    }
+
+                    // Validate structure: bytes 0, 3, 6, 9 should be 0x01
+                    if (buf[recordStart] == 0x01 &&
+                        buf[recordStart + 3] == 0x01 &&
+                        buf[recordStart + 6] == 0x01 &&
+                        buf[recordStart + 9] == 0x01)
+                    {
+                        // Extract kV raw (big-endian uint16 at offset +1)
+                        var kvRaw = (buf[recordStart + 1] << 8) | buf[recordStart + 2];
+                        var kv = kvRaw / 10.0;
+
+                        // Only fire if meaningfully different from last
+                        if (Math.Abs(kv - _lastKvFired) > 0.5)
+                        {
+                            _lastKvFired = kv;
+                            _session.CurrentKv = kv;
+                            KvChanged?.Invoke(this, kv);
+                        }
+                    }
+
+                    _kvParseOffset = i + 2;
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found)
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Scans the image buffer for scanline markers [0x00, 0x01, 0x00, 0xF0].
+    /// Each scanline has 240 × 2-byte big-endian pixels starting 6 bytes
+    /// after the marker position.
+    /// </summary>
+    private void ParseLiveScanlines()
+    {
+        var buf = _session.ImageBuffer;
+        var markerLen = ScanlineMarker.Length;
+        var scanlineBytes = ScanlinePixels * 2; // 480 bytes of pixel data
+        var totalNeeded = markerLen + 2 + scanlineBytes; // marker + row_param(2) + pixels
+
+        while (_scanlineParseOffset + totalNeeded <= buf.Count)
+        {
+            // Search for marker from current offset
+            var found = false;
+            for (var i = _scanlineParseOffset; i <= buf.Count - totalNeeded; i++)
+            {
+                if (buf[i] == ScanlineMarker[0] &&
+                    buf[i + 1] == ScanlineMarker[1] &&
+                    buf[i + 2] == ScanlineMarker[2] &&
+                    buf[i + 3] == ScanlineMarker[3])
+                {
+                    // Scanline ID is 1 byte before the marker
+                    var scanlineId = i >= 1 ? buf[i - 1] : (byte)0;
+
+                    // Pixels start at marker + 6 (skip 4-byte marker + 2-byte row_param)
+                    var pixelStart = i + markerLen + 2;
+                    if (pixelStart + scanlineBytes > buf.Count)
+                    {
+                        // Not enough data yet — wait for more
+                        _scanlineParseOffset = i;
+                        return;
+                    }
+
+                    // Extract 240 big-endian uint16 pixels
+                    var pixels = new ushort[ScanlinePixels];
+                    for (var p = 0; p < ScanlinePixels; p++)
+                    {
+                        var off = pixelStart + p * 2;
+                        pixels[p] = (ushort)((buf[off] << 8) | buf[off + 1]);
+                    }
+
+                    var scanline = new ScanlineData
+                    {
+                        ScanlineId = scanlineId,
+                        PixelCount = ScanlinePixels,
+                        Pixels = pixels,
+                    };
+                    ScanlineReceived?.Invoke(this, scanline);
+
+                    _scanlineParseOffset = pixelStart + scanlineBytes;
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found)
+                break;
+        }
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

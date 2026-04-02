@@ -17,6 +17,9 @@ public interface ISironaService : IAsyncDisposable
     /// <summary>Raised when kV ramp value changes during expose.</summary>
     event EventHandler<double>? KvChanged;
 
+    /// <summary>Raised when a scanline is extracted from the live TCP stream during expose.</summary>
+    event EventHandler<Models.ScanlineData>? ScanlineReceived;
+
     /// <summary>Raised periodically during exposure with the number of bytes received so far.</summary>
     event EventHandler<int>? ScanProgress;
 
