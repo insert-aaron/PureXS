@@ -663,6 +663,18 @@
                                 </Image.RenderTransform>
                             </Image>
 
+                            <!-- Scan progress overlay -->
+                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center"
+                                        Visibility="{Binding IsScanInProgress, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="&#xE8B8;" FontFamily="Segoe MDL2 Assets" FontSize="48"
+                                           Foreground="#FF9800" HorizontalAlignment="Center" />
+                                <TextBlock Text="{Binding ScanProgressText}" Foreground="#FF9800"
+                                           FontSize="16" HorizontalAlignment="Center" Margin="0,10,0,0" />
+                                <!-- Indeterminate progress bar -->
+                                <ProgressBar IsIndeterminate="True" Height="4" Width="200" Margin="0,10,0,0"
+                                             Foreground="#FF9800" Background="#2A2A4A" />
+                            </StackPanel>
+
                             <!-- Zoom percentage overlay -->
                             <TextBlock Text="{Binding ZoomPercentText}"
                                        Foreground="{StaticResource TextSecondary}"

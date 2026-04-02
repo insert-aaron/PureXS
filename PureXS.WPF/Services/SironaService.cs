@@ -46,6 +46,9 @@ public sealed class SironaService : ISironaService
     public event EventHandler<double>? KvChanged;
 
     /// <inheritdoc />
+    public event EventHandler<int>? ScanProgress;
+
+    /// <inheritdoc />
     public ConnectionState State => _state;
 
     /// <summary>
@@ -234,6 +237,7 @@ public sealed class SironaService : ISironaService
                 if (_session.IsExposing)
                 {
                     _session.ImageBuffer.AddRange(data.Span.ToArray());
+                    ScanProgress?.Invoke(this, _session.ImageBuffer.Count);
                 }
 
                 // TODO: Parse kV ramp packets and raise KvChanged

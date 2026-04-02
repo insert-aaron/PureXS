@@ -43,6 +43,18 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
     [ObservableProperty]
     private Brush _machineIndicator = Brushes.Yellow;
 
+    // ── Scan progress state ─────────────────────────────────────────────
+    [ObservableProperty]
+    private bool _isScanInProgress;
+
+    [ObservableProperty]
+    private string _scanProgressText = "";
+
+    [ObservableProperty]
+    private int _scanByteCount;
+
+    public double ScanProgressMB => ScanByteCount / 1_048_576.0;
+
     // ── Image review state ───────────────────────────────────────────────
     [ObservableProperty]
     private BitmapSource? _receivedImage;
@@ -160,6 +172,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         _sirona.ConnectionStateChanged += OnConnectionStateChanged;
         _sirona.HeartbeatTick += OnHeartbeatTick;
         _sirona.ImageReceived += OnImageReceived;
+        _sirona.ScanProgress += OnScanProgress;
 
         _log.Log("PureXS application started");
         _ = AutoConnectAsync();
@@ -214,6 +227,9 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             ReceivedImage = null;
             IsReviewingImage = false;
             ReviewStatus = "";
+            IsScanInProgress = true;
+            ScanByteCount = 0;
+            ScanProgressText = "Waiting for scan data...";
             _log.Log($"Expose started for patient {SelectedPatient?.Id}, exam={SelectedExamType}");
             _toast.Show("Exposure started", "info", 2000);
             await _sirona.ExposeAsync();
@@ -366,6 +382,9 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         IsUploadFailed = false;
         _lastUploadArgs = null;
         ReviewStatus = "";
+        IsScanInProgress = false;
+        ScanByteCount = 0;
+        ScanProgressText = "";
     }
 
     private bool CanRetake() => IsReviewingImage && !IsUploading;
@@ -456,6 +475,9 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         PanY = 0;
         IsReviewingImage = false;
         ReviewStatus = "";
+        IsScanInProgress = false;
+        ScanByteCount = 0;
+        ScanProgressText = "";
     }
 
     [RelayCommand]
@@ -751,6 +773,21 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         Application.Current.Dispatcher.Invoke(() => HeartbeatPulse = !HeartbeatPulse);
     }
 
+    private void OnScanProgress(object? sender, int byteCount)
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            ScanByteCount = byteCount;
+            ScanProgressText = $"Receiving scan data... {byteCount / 1_048_576.0:F1} MB";
+            IsScanInProgress = true;
+        });
+    }
+
+    partial void OnScanByteCountChanged(int value)
+    {
+        OnPropertyChanged(nameof(ScanProgressMB));
+    }
+
     private void OnImageReceived(object? sender, byte[] rawBytes)
     {
         // Process raw scan bytes through the Python decoder pipeline (async)
@@ -761,6 +798,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
     {
         Application.Current.Dispatcher.Invoke(() =>
         {
+            IsScanInProgress = false;
             MachineStatus = "Processing image...";
             MachineIndicator = new SolidColorBrush(Color.FromRgb(255, 167, 38)); // orange
             IsExposing = false;
@@ -897,6 +935,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         _sirona.ConnectionStateChanged -= OnConnectionStateChanged;
         _sirona.HeartbeatTick -= OnHeartbeatTick;
         _sirona.ImageReceived -= OnImageReceived;
+        _sirona.ScanProgress -= OnScanProgress;
         _log.Log("PureXS application shutting down");
         await _sirona.DisposeAsync();
         if (_pureChart is IDisposable disposable)
