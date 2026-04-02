@@ -26,7 +26,6 @@ public partial class MainWindow : Window
         ImageContainer.MouseLeftButtonDown += ImageContainer_MouseLeftButtonDown;
         ImageContainer.MouseMove += ImageContainer_MouseMove;
         ImageContainer.MouseLeftButtonUp += ImageContainer_MouseLeftButtonUp;
-        ImageContainer.MouseDoubleClick += ImageContainer_MouseDoubleClick;
     }
 
     private void ImageContainer_MouseWheel(object sender, MouseWheelEventArgs e)
@@ -67,11 +66,18 @@ public partial class MainWindow : Window
 
     private void ImageContainer_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (!ViewModel.HasImage || ViewModel.ZoomLevel <= 1.01)
+        if (!ViewModel.HasImage)
             return;
 
-        // Ignore if this is actually a double-click (first click of the pair)
+        // Double-click: reset zoom
         if (e.ClickCount == 2)
+        {
+            ViewModel.FitToCanvasCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
+        if (ViewModel.ZoomLevel <= 1.01)
             return;
 
         _isDragging = true;
@@ -105,12 +111,4 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    private void ImageContainer_MouseDoubleClick(object sender, MouseButtonEventArgs e)
-    {
-        if (!ViewModel.HasImage)
-            return;
-
-        ViewModel.FitToCanvasCommand.Execute(null);
-        e.Handled = true;
-    }
 }
