@@ -96,8 +96,9 @@ jobs:
         run: |
           cd releases-repo
 
-          # Remove old x64 binaries (keep .git, x86/, SetupAndRun.bat, README.md, Assets/)
-          Get-ChildItem -Path . -Exclude '.git','x86','SetupAndRun.bat','README.md','Assets','.gitignore' |
+          # Remove old binaries (keep .git, x86/, README.md, Assets/)
+          # NOTE: SetupAndRun.bat is NOT excluded — CI overwrites it from source
+          Get-ChildItem -Path . -Exclude '.git','x86','README.md','Assets' |
             Where-Object { $_.Name -ne '.git' } |
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
@@ -110,6 +111,12 @@ jobs:
           # Copy new x86 build into x86/ (includes decoder/ subdirectory)
           New-Item -ItemType Directory -Path x86 -Force | Out-Null
           Copy-Item -Path ..\publish\x86\* -Destination x86\ -Recurse -Force
+
+          # Copy SetupAndRun.bat from source (single source of truth)
+          Copy-Item -Path ..\SetupAndRun.bat -Destination . -Force
+
+          # Copy releases .gitignore from source
+          Copy-Item -Path ..\releases-gitignore -Destination .\.gitignore -Force
         shell: pwsh
 
       - name: Commit and push to PureXS-releases
