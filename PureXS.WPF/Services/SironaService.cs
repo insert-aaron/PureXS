@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Net.Sockets;
 using PureXS.Models;
 
@@ -6,25 +7,38 @@ namespace PureXS.Services;
 
 /// <summary>
 /// Manages the raw TCP connection to a Sirona ORTHOPHOS XG unit on port 12837.
-/// Handles heartbeat keep-alive, expose triggering, post-scan reconnect, and
-/// image byte-stream buffering — all fully async.
+/// Implements the P2K session protocol: handshake (SESSION_OPEN + SESSION_INIT),
+/// heartbeat keep-alive, session refresh, expose triggering, post-scan reconnect,
+/// and image byte-stream buffering.
+///
+/// Protocol reverse-engineered from hb_decoder.py SironaLiveClient.
 /// </summary>
 public sealed class SironaService : ISironaService
 {
-    // ── Protocol constants ──────────────────────────────────────────────────
-    private static readonly byte[] HeartbeatPrefix = [0x20, 0x00, 0x07, 0x2D, 0x07, 0xD0];
-    private static readonly byte[] ExposePacket = [0xFF, 0x12, 0x01, 0x03, 0x42, 0x0E, 0x01];
+    // ── P2K Protocol constants ─────────────────────────────────────────────
+    private const ushort MAGIC = 0x072D;
+    private const ushort PORT_MARKER = 0x07D0;
+    private const int SESSION_HEADER_SIZE = 20;
+
+    // Function codes
+    private const ushort FC_SESSION_OPEN_REQ = 0x205C;
+    private const ushort FC_SESSION_OPEN_ACK = 0x205D;
+    private const ushort FC_SESSION_INIT = 0x2001;
+    private const ushort FC_HB_REQUEST = 0x200B;
+    private const ushort FC_HB_RESPONSE = 0x200C;
+    private const ushort FC_IMAGE_ACK = 0x1008;
+
+    // Post-scan disconnect marker
     private static readonly byte[] PostScanDisconnect = [0xE7, 0x14, 0x02];
 
-    // Live parsing markers (matching Python hb_decoder.py constants)
-    private static readonly byte[] ScanlineMarker = [0x00, 0x01, 0x00, 0xF0]; // pixel_count = 240
-    private const int ScanlinePixels = 240;
-    private const int KvRecordSize = 15;
-    private const byte KvRecordEndByte1 = 0x0E;
-    private const byte KvRecordEndByte2 = 0x01;
-
-    private const int HeartbeatIntervalMs = 100;
+    // Timing
+    private const int HeartbeatIntervalMs = 900;      // matches Python hb_interval=0.9
+    private const double SessionRefreshSeconds = 1.5;  // matches Python SESSION_REFRESH_S
     private const int ReconnectHeartbeatGate = 10;
+
+    // Live parsing markers
+    private static readonly byte[] ScanlineMarker = [0x00, 0x01, 0x00, 0xF0];
+    private const int ScanlinePixels = 240;
 
     // ── Configuration ───────────────────────────────────────────────────────
     private readonly string _host;
@@ -38,8 +52,10 @@ public sealed class SironaService : ISironaService
     private CancellationTokenSource? _sessionCts;
     private readonly SironaSession _session = new();
     private ConnectionState _state = ConnectionState.Disconnected;
+    private Stopwatch _sessionTimer = new();
+    private DateTime _lastHeartbeatTime = DateTime.MinValue;
 
-    // Live parsing state — tracks how far we've scanned the image buffer
+    // Live parsing state
     private int _kvParseOffset;
     private int _scanlineParseOffset;
     private double _lastKvFired;
@@ -67,13 +83,6 @@ public sealed class SironaService : ISironaService
     /// <inheritdoc />
     public ConnectionState State => _state;
 
-    /// <summary>
-    /// Creates a new <see cref="SironaService"/> targeting the specified host and port.
-    /// </summary>
-    /// <param name="host">IP address of the Sirona unit (default 192.168.139.170).</param>
-    /// <param name="port">TCP port (default 12837).</param>
-    /// <param name="maxReconnectAttempts">Maximum reconnect attempts after post-scan disconnect.</param>
-    /// <param name="reconnectDelay">Delay between reconnect attempts.</param>
     public SironaService(
         string host = "192.168.139.170",
         int port = 12837,
@@ -99,12 +108,50 @@ public sealed class SironaService : ISironaService
         SetState(ConnectionState.Connecting);
 
         _tcp = new TcpClient();
+        _tcp.ReceiveTimeout = 10000;
+        _tcp.SendTimeout = 5000;
         await _tcp.ConnectAsync(_host, _port, _sessionCts.Token);
         _stream = _tcp.GetStream();
 
+        // ── P2K Session Handshake ──────────────────────────────────────
+        // Step 1: SESSION_OPEN_REQ (optional — some firmware ignores it)
+        await SendSessionFrameAsync(FC_SESSION_OPEN_REQ, flags: 0x000F, ct);
+
+        // Wait up to 1s for ACK
+        try
+        {
+            using var ackCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            ackCts.CancelAfter(1000);
+            var resp = await ReceiveFrameAsync(ackCts.Token);
+            var fc = resp.Length >= 2 ? (ushort)((resp[0] << 8) | resp[1]) : (ushort)0;
+            Debug.WriteLine(fc == FC_SESSION_OPEN_ACK
+                ? "[Sirona] Session opened (0x205D ACK)"
+                : $"[Sirona] SESSION_OPEN response: 0x{fc:X4} — proceeding to INIT");
+        }
+        catch (OperationCanceledException)
+        {
+            Debug.WriteLine("[Sirona] SESSION_OPEN ACK skipped (timeout) — proceeding to INIT");
+        }
+
+        // Step 2: SESSION_INIT (always sent)
+        await SendSessionFrameAsync(FC_SESSION_INIT, ct: ct);
+        try
+        {
+            using var initCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            initCts.CancelAfter(3000);
+            var resp = await ReceiveFrameAsync(initCts.Token);
+            var fc = resp.Length >= 2 ? (ushort)((resp[0] << 8) | resp[1]) : (ushort)0;
+            Debug.WriteLine($"[Sirona] Session init response: 0x{fc:X4} ({resp.Length} bytes)");
+        }
+        catch (OperationCanceledException)
+        {
+            Debug.WriteLine("[Sirona] SESSION_INIT response timeout — proceeding anyway");
+        }
+
+        _sessionTimer.Restart();
         SetState(ConnectionState.Connected);
 
-        // Fire-and-forget the heartbeat and reader loops
+        // Start heartbeat and reader loops
         _ = HeartbeatLoopAsync(_sessionCts.Token);
         _ = ReaderLoopAsync(_sessionCts.Token);
     }
@@ -124,12 +171,12 @@ public sealed class SironaService : ISironaService
 
         _tcp?.Dispose();
         _tcp = null;
+        _sessionTimer.Stop();
 
         SetState(ConnectionState.Disconnected);
     }
 
     /// <inheritdoc />
-    /// <exception cref="InvalidOperationException">Thrown when not connected or already exposing.</exception>
     public async Task ExposeAsync(CancellationToken ct = default)
     {
         if (_state != ConnectionState.Connected)
@@ -145,8 +192,10 @@ public sealed class SironaService : ISironaService
         _lastKvFired = 0;
         SetState(ConnectionState.Exposing);
 
-        await _stream.WriteAsync(ExposePacket, ct);
-        await _stream.FlushAsync(ct);
+        // Note: expose is triggered by the physical button on the Orthophos,
+        // not by a software command. The device sends EXPOSE_NOTIFY (0x1005)
+        // when the button is pressed. We just need to be in ARMED state
+        // (patient data sent) and listening.
     }
 
     /// <inheritdoc />
@@ -155,12 +204,55 @@ public sealed class SironaService : ISironaService
         await DisconnectAsync();
     }
 
+    // ── P2K Frame building ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Builds a 20-byte P2K session header matching the Python _build_session_header.
+    /// Layout: [func_code:2][magic:2][port:2][version:2][flags:2][reserved:8][payload_len:2]
+    /// </summary>
+    private static byte[] BuildSessionHeader(ushort funcCode, ushort flags = 0x000E, ushort payloadLength = 0)
+    {
+        var header = new byte[SESSION_HEADER_SIZE];
+        header[0] = (byte)((funcCode >> 8) & 0xFF);
+        header[1] = (byte)(funcCode & 0xFF);
+        BinaryPrimitives.WriteUInt16BigEndian(header.AsSpan(2), MAGIC);
+        BinaryPrimitives.WriteUInt16BigEndian(header.AsSpan(4), PORT_MARKER);
+        BinaryPrimitives.WriteUInt16BigEndian(header.AsSpan(6), 0x0001); // version
+        BinaryPrimitives.WriteUInt16BigEndian(header.AsSpan(8), flags);
+        // bytes 10-17: reserved (zeros)
+        BinaryPrimitives.WriteUInt16BigEndian(header.AsSpan(18), payloadLength);
+        return header;
+    }
+
+    private async Task SendSessionFrameAsync(ushort funcCode, ushort flags = 0x000E, CancellationToken ct = default)
+    {
+        if (_stream is null)
+            throw new InvalidOperationException("No active network stream.");
+
+        var header = BuildSessionHeader(funcCode, flags);
+        await _stream.WriteAsync(header, ct);
+        await _stream.FlushAsync(ct);
+    }
+
+    private async Task<byte[]> ReceiveFrameAsync(CancellationToken ct)
+    {
+        if (_stream is null)
+            throw new InvalidOperationException("No active network stream.");
+
+        var buffer = new byte[4096];
+        var bytesRead = await _stream.ReadAsync(buffer, ct);
+        if (bytesRead == 0)
+            throw new ConnectionException("Connection closed by device");
+
+        return buffer[..bytesRead];
+    }
+
     // ── Heartbeat loop ──────────────────────────────────────────────────────
 
     /// <summary>
-    /// Sends heartbeat packets every 100 ms to keep the Sirona session alive.
-    /// After a post-scan reconnect, waits for <see cref="ReconnectHeartbeatGate"/>
-    /// successful cycles before allowing a new expose.
+    /// Sends P2K HB_REQUEST frames to keep the session alive.
+    /// Also handles session refresh every 1.5s (re-sends SESSION_OPEN + SESSION_INIT).
+    /// Matches Python SironaLiveClient._hb_loop behavior.
     /// </summary>
     private async Task HeartbeatLoopAsync(CancellationToken ct)
     {
@@ -168,24 +260,34 @@ public sealed class SironaService : ISironaService
         {
             while (!ct.IsCancellationRequested)
             {
-                if (_stream is not null)
+                if (_stream is null)
+                    break;
+
+                // Don't send HB during expose — device is flooding data
+                if (!_session.IsExposing)
                 {
-                    var packet = BuildHeartbeatPacket();
-                    await _stream.WriteAsync(packet, ct);
-                    await _stream.FlushAsync(ct);
-
-                    _session.HeartbeatCount++;
-                    HeartbeatTick?.Invoke(this, EventArgs.Empty);
-
-                    if (_session.IsPostScanDisconnect)
+                    // Session refresh if needed (matches Python SESSION_REFRESH_S = 1.5)
+                    if (_sessionTimer.Elapsed.TotalSeconds >= SessionRefreshSeconds)
                     {
-                        _session.ReconnectHeartbeatCycles++;
-                        if (_session.ReconnectHeartbeatCycles >= ReconnectHeartbeatGate)
-                        {
-                            _session.IsPostScanDisconnect = false;
-                            _session.ReconnectHeartbeatCycles = 0;
-                            SetState(ConnectionState.Connected);
-                        }
+                        await SessionRefreshAsync(ct);
+                        continue; // skip HB this cycle, refresh resets timer
+                    }
+
+                    // Send HB_REQUEST
+                    await SendSessionFrameAsync(FC_HB_REQUEST, ct: ct);
+                    _session.HeartbeatCount++;
+                    _lastHeartbeatTime = DateTime.UtcNow;
+                    HeartbeatTick?.Invoke(this, EventArgs.Empty);
+                }
+
+                if (_session.IsPostScanDisconnect)
+                {
+                    _session.ReconnectHeartbeatCycles++;
+                    if (_session.ReconnectHeartbeatCycles >= ReconnectHeartbeatGate)
+                    {
+                        _session.IsPostScanDisconnect = false;
+                        _session.ReconnectHeartbeatCycles = 0;
+                        SetState(ConnectionState.Connected);
                     }
                 }
 
@@ -193,35 +295,41 @@ public sealed class SironaService : ISironaService
             }
         }
         catch (OperationCanceledException) { /* Normal shutdown */ }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Connection lost — attempt reconnect if not already cancelled
+            Debug.WriteLine($"[Sirona] Heartbeat error: {ex.Message}");
             if (!ct.IsCancellationRequested)
                 _ = ReconnectAsync();
         }
     }
 
     /// <summary>
-    /// Builds a heartbeat packet with the current sequence number.
+    /// Re-establishes the session by sending SESSION_OPEN + SESSION_INIT.
+    /// The Orthophos requires periodic session refresh (~every 1.5s).
+    /// Matches Python SironaLiveClient._session_refresh().
     /// </summary>
-    private byte[] BuildHeartbeatPacket()
+    private async Task SessionRefreshAsync(CancellationToken ct)
     {
-        var packet = new byte[HeartbeatPrefix.Length + 1];
-        HeartbeatPrefix.CopyTo(packet, 0);
-        packet[^1] = _session.SequenceNumber;
-        _session.SequenceNumber = (byte)((_session.SequenceNumber + 1) & 0xFF);
-        return packet;
+        try
+        {
+            await SendSessionFrameAsync(FC_SESSION_OPEN_REQ, flags: 0x000F, ct);
+            // Brief delay for device to process
+            await Task.Delay(50, ct);
+            await SendSessionFrameAsync(FC_SESSION_INIT, ct: ct);
+            _sessionTimer.Restart();
+            Debug.WriteLine("[Sirona] Session refreshed");
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[Sirona] Session refresh failed: {ex.Message}");
+        }
     }
 
     // ── Reader loop ─────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Continuously reads from the TCP stream, detecting post-scan disconnect
-    /// signals and buffering image data during an active expose.
-    /// </summary>
     private async Task ReaderLoopAsync(CancellationToken ct)
     {
-        var buffer = new byte[8192];
+        var buffer = new byte[65536]; // larger buffer for image data
 
         try
         {
@@ -229,7 +337,7 @@ public sealed class SironaService : ISironaService
             {
                 var bytesRead = await _stream.ReadAsync(buffer.AsMemory(0, buffer.Length), ct);
                 if (bytesRead == 0)
-                    break; // Server closed connection
+                    break;
 
                 var data = buffer.AsMemory(0, bytesRead);
 
@@ -238,16 +346,19 @@ public sealed class SironaService : ISironaService
                 {
                     _session.IsPostScanDisconnect = true;
 
-                    // If we were exposing, finalize the image
                     if (_session.IsExposing)
                     {
                         _session.IsExposing = false;
+
+                        // Send IMAGE_ACK (matches Python behavior)
+                        try { await SendSessionFrameAsync(FC_IMAGE_ACK, ct: ct); }
+                        catch { /* best effort */ }
+
                         var imageBytes = _session.ImageBuffer.ToArray();
                         if (imageBytes.Length > 0)
                             ImageReceived?.Invoke(this, imageBytes);
                     }
 
-                    // Sirona drops the connection after this — reconnect
                     _ = ReconnectAsync();
                     return;
                 }
@@ -258,15 +369,15 @@ public sealed class SironaService : ISironaService
                     _session.ImageBuffer.AddRange(data.Span.ToArray());
                     ScanProgress?.Invoke(this, _session.ImageBuffer.Count);
 
-                    // Live parsing: extract kV samples and scanlines from accumulated buffer
                     ParseLiveKvSamples();
                     ParseLiveScanlines();
                 }
             }
         }
         catch (OperationCanceledException) { /* Normal shutdown */ }
-        catch (Exception)
+        catch (Exception ex)
         {
+            Debug.WriteLine($"[Sirona] Reader error: {ex.Message}");
             if (!ct.IsCancellationRequested)
                 _ = ReconnectAsync();
         }
@@ -274,15 +385,10 @@ public sealed class SironaService : ISironaService
 
     // ── Reconnect logic ─────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Attempts to reconnect to the Sirona unit after a post-scan disconnect.
-    /// Retries up to <see cref="_maxReconnectAttempts"/> times with a configurable delay.
-    /// </summary>
     private async Task ReconnectAsync()
     {
         SetState(ConnectionState.Reconnecting);
 
-        // Tear down old connection
         if (_stream is not null)
         {
             await _stream.DisposeAsync();
@@ -298,24 +404,32 @@ public sealed class SironaService : ISironaService
                 await Task.Delay(_reconnectDelay);
 
                 _tcp = new TcpClient();
+                _tcp.ReceiveTimeout = 10000;
+                _tcp.SendTimeout = 5000;
                 await _tcp.ConnectAsync(_host, _port);
                 _stream = _tcp.GetStream();
+
+                // P2K handshake on reconnect (matches Python reconnect behavior)
+                await SendSessionFrameAsync(FC_SESSION_OPEN_REQ, flags: 0x000F);
+                await Task.Delay(100);
+                await SendSessionFrameAsync(FC_SESSION_INIT);
+                _sessionTimer.Restart();
 
                 _session.ReconnectHeartbeatCycles = 0;
                 _session.IsPostScanDisconnect = true;
 
-                // Restart loops with a new CTS
                 _sessionCts?.Dispose();
                 _sessionCts = new CancellationTokenSource();
                 _ = HeartbeatLoopAsync(_sessionCts.Token);
                 _ = ReaderLoopAsync(_sessionCts.Token);
 
-                SetState(ConnectionState.Reconnecting); // Will transition to Connected after HB gate
+                Debug.WriteLine($"[Sirona] Reconnected on attempt {attempt}");
+                SetState(ConnectionState.Reconnecting); // transitions to Connected after HB gate
                 return;
             }
-            catch
+            catch (Exception ex)
             {
-                // Retry
+                Debug.WriteLine($"[Sirona] Reconnect attempt {attempt} failed: {ex.Message}");
             }
         }
 
@@ -324,24 +438,18 @@ public sealed class SironaService : ISironaService
 
     // ── Live stream parsing ────────────────────────────────────────────────
 
-    /// <summary>
-    /// Scans the image buffer (from the last parsed offset) for kV ramp records.
-    /// Each record is 15 bytes ending with [0x0E, 0x01]. The kV value is a
-    /// big-endian uint16 at offset +1 from the record start, divided by 10.
-    /// </summary>
     private void ParseLiveKvSamples()
     {
         var buf = _session.ImageBuffer;
-        // Need at least KvRecordSize bytes beyond our offset
-        while (_kvParseOffset + KvRecordSize <= buf.Count)
+        const int kvRecordSize = 15;
+
+        while (_kvParseOffset + kvRecordSize <= buf.Count)
         {
-            // Search for end marker [0x0E, 0x01]
             var found = false;
-            for (var i = _kvParseOffset + KvRecordSize - 3; i < buf.Count - 1; i++)
+            for (var i = _kvParseOffset + kvRecordSize - 3; i < buf.Count - 1; i++)
             {
-                if (buf[i] == KvRecordEndByte1 && buf[i + 1] == KvRecordEndByte2)
+                if (buf[i] == 0x0E && buf[i + 1] == 0x01)
                 {
-                    // Record starts 12 bytes before the 0x0E byte
                     var recordStart = i - 12;
                     if (recordStart < _kvParseOffset || recordStart < 0)
                     {
@@ -350,17 +458,14 @@ public sealed class SironaService : ISironaService
                         break;
                     }
 
-                    // Validate structure: bytes 0, 3, 6, 9 should be 0x01
                     if (buf[recordStart] == 0x01 &&
                         buf[recordStart + 3] == 0x01 &&
                         buf[recordStart + 6] == 0x01 &&
                         buf[recordStart + 9] == 0x01)
                     {
-                        // Extract kV raw (big-endian uint16 at offset +1)
                         var kvRaw = (buf[recordStart + 1] << 8) | buf[recordStart + 2];
                         var kv = kvRaw / 10.0;
 
-                        // Only fire if meaningfully different from last
                         if (Math.Abs(kv - _lastKvFired) > 0.5)
                         {
                             _lastKvFired = kv;
@@ -380,21 +485,15 @@ public sealed class SironaService : ISironaService
         }
     }
 
-    /// <summary>
-    /// Scans the image buffer for scanline markers [0x00, 0x01, 0x00, 0xF0].
-    /// Each scanline has 240 × 2-byte big-endian pixels starting 6 bytes
-    /// after the marker position.
-    /// </summary>
     private void ParseLiveScanlines()
     {
         var buf = _session.ImageBuffer;
         var markerLen = ScanlineMarker.Length;
-        var scanlineBytes = ScanlinePixels * 2; // 480 bytes of pixel data
-        var totalNeeded = markerLen + 2 + scanlineBytes; // marker + row_param(2) + pixels
+        var scanlineBytes = ScanlinePixels * 2;
+        var totalNeeded = markerLen + 2 + scanlineBytes;
 
         while (_scanlineParseOffset + totalNeeded <= buf.Count)
         {
-            // Search for marker from current offset
             var found = false;
             for (var i = _scanlineParseOffset; i <= buf.Count - totalNeeded; i++)
             {
@@ -403,19 +502,15 @@ public sealed class SironaService : ISironaService
                     buf[i + 2] == ScanlineMarker[2] &&
                     buf[i + 3] == ScanlineMarker[3])
                 {
-                    // Scanline ID is 1 byte before the marker
                     var scanlineId = i >= 1 ? buf[i - 1] : (byte)0;
-
-                    // Pixels start at marker + 6 (skip 4-byte marker + 2-byte row_param)
                     var pixelStart = i + markerLen + 2;
+
                     if (pixelStart + scanlineBytes > buf.Count)
                     {
-                        // Not enough data yet — wait for more
                         _scanlineParseOffset = i;
                         return;
                     }
 
-                    // Extract 240 big-endian uint16 pixels
                     var pixels = new ushort[ScanlinePixels];
                     for (var p = 0; p < ScanlinePixels; p++)
                     {
@@ -423,13 +518,12 @@ public sealed class SironaService : ISironaService
                         pixels[p] = (ushort)((buf[off] << 8) | buf[off + 1]);
                     }
 
-                    var scanline = new ScanlineData
+                    ScanlineReceived?.Invoke(this, new ScanlineData
                     {
                         ScanlineId = scanlineId,
                         PixelCount = ScanlinePixels,
                         Pixels = pixels,
-                    };
-                    ScanlineReceived?.Invoke(this, scanline);
+                    });
 
                     _scanlineParseOffset = pixelStart + scanlineBytes;
                     found = true;
@@ -451,9 +545,6 @@ public sealed class SironaService : ISironaService
         ConnectionStateChanged?.Invoke(this, newState);
     }
 
-    /// <summary>
-    /// Checks whether a byte span contains a given subsequence.
-    /// </summary>
     private static bool ContainsSequence(ReadOnlySpan<byte> data, ReadOnlySpan<byte> sequence)
     {
         for (var i = 0; i <= data.Length - sequence.Length; i++)
@@ -463,4 +554,10 @@ public sealed class SironaService : ISironaService
         }
         return false;
     }
+}
+
+/// <summary>Simple exception for connection errors.</summary>
+public class ConnectionException : Exception
+{
+    public ConnectionException(string message) : base(message) { }
 }
