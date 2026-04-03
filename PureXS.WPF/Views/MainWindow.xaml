@@ -624,7 +624,7 @@
                                 </TextBlock>
                             </Grid>
                             <ProgressBar Height="6"
-                                         Value="{Binding KvGaugePercent}"
+                                         Value="{Binding KvGaugePercent, Mode=OneWay}"
                                          Minimum="0" Maximum="1"
                                          Foreground="#4FC3F7"
                                          Background="#2A2A4A" />
