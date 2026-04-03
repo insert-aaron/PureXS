@@ -134,6 +134,168 @@
             </Setter>
         </Style>
 
+        <!-- Green button style (Set Patient, Confirm, New Patient) -->
+        <Style x:Key="GreenButtonStyle" TargetType="Button">
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="12,8" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border"
+                                Background="#1B5E20"
+                                CornerRadius="6"
+                                Padding="{TemplateBinding Padding}"
+                                BorderBrush="#2E7D32"
+                                BorderThickness="1">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="#2E7D32" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="border" Property="Background" Value="#2A2A3A" />
+                                <Setter Property="Foreground" Value="#5A5A6A" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Purple button style (Connect, View DICOM) -->
+        <Style x:Key="PurpleButtonStyle" TargetType="Button">
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="14,8" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border"
+                                Background="#4A148C"
+                                CornerRadius="6"
+                                Padding="{TemplateBinding Padding}"
+                                BorderBrush="#6A1B9A"
+                                BorderThickness="1">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="#6A1B9A" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="border" Property="Background" Value="#2A2A3A" />
+                                <Setter Property="Foreground" Value="#5A5A6A" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Blue button style (Save PNG) -->
+        <Style x:Key="BlueButtonStyle" TargetType="Button">
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="12,8" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border"
+                                Background="#1565C0"
+                                CornerRadius="6"
+                                Padding="{TemplateBinding Padding}"
+                                BorderBrush="#1976D2"
+                                BorderThickness="1">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="#1976D2" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="border" Property="Background" Value="#2A2A3A" />
+                                <Setter Property="Foreground" Value="#5A5A6A" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Orange button style (Retry Upload) -->
+        <Style x:Key="OrangeButtonStyle" TargetType="Button">
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="12,8" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border"
+                                Background="#E65100"
+                                CornerRadius="6"
+                                Padding="{TemplateBinding Padding}"
+                                BorderBrush="#FF6D00"
+                                BorderThickness="1">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="#FF6D00" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="border" Property="Background" Value="#2A2A3A" />
+                                <Setter Property="Foreground" Value="#5A5A6A" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Red expose toolbar button -->
+        <Style x:Key="ExposeToolbarButtonStyle" TargetType="Button">
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Padding" Value="16,8" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border"
+                                Background="#FF3B30"
+                                CornerRadius="6"
+                                Padding="{TemplateBinding Padding}"
+                                BorderBrush="#FF5A4F"
+                                BorderThickness="1">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="#FF5A4F" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="border" Property="Background" Value="#616161" />
+                                <Setter TargetName="border" Property="BorderBrush" Value="#757575" />
+                                <Setter Property="Foreground" Value="#9E9E9E" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- Heartbeat pulse animation -->
         <Storyboard x:Key="PulseAnimation">
             <DoubleAnimation Storyboard.TargetName="HeartbeatDot"
@@ -145,35 +307,274 @@
 
     <Grid>
     <DockPanel>
-        <!-- ── Bottom Status Bar ─────────────────────────────────────────── -->
-        <Border DockPanel.Dock="Bottom"
-                Background="#111128"
-                Padding="14,8"
-                BorderBrush="{StaticResource BorderBrush}"
-                BorderThickness="0,1,0,0">
-            <TextBlock Text="{Binding PatientBanner}"
-                       Foreground="{StaticResource TextPrimary}"
-                       FontSize="12" />
+        <!-- ================================================================ -->
+        <!-- TOP TOOLBAR (Height=50, Background=#0D1117)                      -->
+        <!-- ================================================================ -->
+        <Border DockPanel.Dock="Top"
+                Background="#0D1117"
+                Height="50"
+                Padding="14,0"
+                BorderBrush="#1E1E2E"
+                BorderThickness="0,0,0,1">
+            <Grid VerticalAlignment="Center">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />  <!-- PureXS logo -->
+                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="Auto" />  <!-- Connect -->
+                    <ColumnDefinition Width="10" />
+                    <ColumnDefinition Width="Auto" />  <!-- Expose -->
+                    <ColumnDefinition Width="10" />
+                    <ColumnDefinition Width="Auto" />  <!-- History -->
+                    <ColumnDefinition Width="*" />      <!-- spacer -->
+                    <ColumnDefinition Width="Auto" />  <!-- API status -->
+                </Grid.ColumnDefinitions>
+
+                <!-- PureXS logo text -->
+                <TextBlock Grid.Column="0"
+                           Text="PureXS"
+                           Foreground="#4FC3F7"
+                           FontSize="18"
+                           FontWeight="Bold"
+                           VerticalAlignment="Center" />
+
+                <!-- Connect to Device -->
+                <Button Grid.Column="2"
+                        Content="{Binding ConnectButtonText}"
+                        Command="{Binding ToggleConnectionCommand}"
+                        IsEnabled="{Binding IsConnectEnabled}"
+                        Style="{StaticResource PurpleButtonStyle}"
+                        VerticalAlignment="Center" />
+
+                <!-- Expose (toolbar size) -->
+                <Button Grid.Column="4"
+                        Command="{Binding ExposeCommand}"
+                        Style="{StaticResource ExposeToolbarButtonStyle}"
+                        VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#x2622; " FontSize="13" />
+                        <TextBlock Text="EXPOSE" FontSize="13" FontWeight="Bold" />
+                    </StackPanel>
+                </Button>
+
+                <!-- History -->
+                <Button Grid.Column="6"
+                        Command="{Binding OpenHistoryCommand}"
+                        Style="{StaticResource ToolbarButtonStyle}"
+                        VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#x1F4C1; " FontSize="12" />
+                        <TextBlock Text="History" FontSize="12" />
+                    </StackPanel>
+                </Button>
+
+                <!-- API / connection status (right-aligned) -->
+                <StackPanel Grid.Column="8"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <Ellipse Width="8" Height="8"
+                             Fill="{Binding MachineIndicator}"
+                             Margin="0,0,6,0"
+                             VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding MachineStatus}"
+                               Foreground="{StaticResource TextSecondary}"
+                               FontSize="11"
+                               VerticalAlignment="Center"
+                               MaxWidth="200"
+                               TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+            </Grid>
         </Border>
 
-        <!-- ── Main Content ──────────────────────────────────────────────── -->
-        <Grid Margin="10">
+        <!-- ================================================================ -->
+        <!-- STATUS BAR (Bottom, Height=28, Background=#1A1A1A)               -->
+        <!-- ================================================================ -->
+        <Border DockPanel.Dock="Bottom"
+                Background="#1A1A1A"
+                Height="28"
+                Padding="14,0"
+                BorderBrush="#2A2A4A"
+                BorderThickness="0,1,0,0">
+            <Grid VerticalAlignment="Center">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />  <!-- Heart icon -->
+                    <ColumnDefinition Width="8" />
+                    <ColumnDefinition Width="Auto" />  <!-- HB text -->
+                    <ColumnDefinition Width="20" />
+                    <ColumnDefinition Width="*" />      <!-- Patient banner -->
+                    <ColumnDefinition Width="20" />
+                    <ColumnDefinition Width="Auto" />  <!-- Expose count -->
+                </Grid.ColumnDefinitions>
+
+                <!-- Heart icon — red when connected, gray when not -->
+                <TextBlock Grid.Column="0"
+                           Text="&#x2764;"
+                           FontSize="12"
+                           VerticalAlignment="Center">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="#424242" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsConnected}" Value="True">
+                                    <Setter Property="Foreground" Value="#F44336" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+
+                <!-- HB status text -->
+                <TextBlock Grid.Column="2"
+                           Text="{Binding HbStatusText}"
+                           Foreground="{StaticResource TextSecondary}"
+                           FontSize="11"
+                           FontFamily="Consolas"
+                           VerticalAlignment="Center" />
+
+                <!-- Patient banner -->
+                <TextBlock Grid.Column="4"
+                           Text="{Binding PatientBanner}"
+                           Foreground="#4FC3F7"
+                           FontSize="11"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" />
+
+                <!-- Expose count (right) -->
+                <TextBlock Grid.Column="6"
+                           Text="{Binding ExposeCountText, Mode=OneWay}"
+                           Foreground="{StaticResource TextSecondary}"
+                           FontSize="11"
+                           FontFamily="Consolas"
+                           VerticalAlignment="Center" />
+            </Grid>
+        </Border>
+
+        <!-- ================================================================ -->
+        <!-- BOTTOM TOOLBAR (Background=#111827)                              -->
+        <!-- ================================================================ -->
+        <Border DockPanel.Dock="Bottom"
+                Background="#111827"
+                Padding="14,8"
+                BorderBrush="#1E1E2E"
+                BorderThickness="0,1,0,0">
+            <StackPanel>
+                <!-- Row 1: Image info + Brightness + Contrast sliders -->
+                <Grid Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />      <!-- image info -->
+                        <ColumnDefinition Width="70" />     <!-- brightness label -->
+                        <ColumnDefinition Width="160" />    <!-- brightness slider -->
+                        <ColumnDefinition Width="16" />
+                        <ColumnDefinition Width="60" />     <!-- contrast label -->
+                        <ColumnDefinition Width="160" />    <!-- contrast slider -->
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0"
+                               Text="{Binding ReviewStatus}"
+                               Foreground="{Binding ReviewStatusColor}"
+                               FontSize="11"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" />
+
+                    <TextBlock Grid.Column="1"
+                               Text="Brightness"
+                               Foreground="{StaticResource TextSecondary}"
+                               FontSize="11"
+                               VerticalAlignment="Center" />
+                    <Slider Grid.Column="2"
+                            Minimum="-80" Maximum="80"
+                            Value="{Binding Brightness}"
+                            VerticalAlignment="Center" />
+
+                    <TextBlock Grid.Column="4"
+                               Text="Contrast"
+                               Foreground="{StaticResource TextSecondary}"
+                               FontSize="11"
+                               VerticalAlignment="Center" />
+                    <Slider Grid.Column="5"
+                            Minimum="0.3" Maximum="3.0"
+                            Value="{Binding Contrast}"
+                            TickFrequency="0.1"
+                            IsSnapToTickEnabled="False"
+                            VerticalAlignment="Center" />
+                </Grid>
+
+                <!-- Row 2: Action buttons -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />  <!-- Save PNG -->
+                        <ColumnDefinition Width="6" />
+                        <ColumnDefinition Width="Auto" />  <!-- DICOM Folder -->
+                        <ColumnDefinition Width="6" />
+                        <ColumnDefinition Width="Auto" />  <!-- View DICOM -->
+                        <ColumnDefinition Width="*" />      <!-- spacer -->
+                        <ColumnDefinition Width="Auto" />  <!-- New Patient -->
+                        <ColumnDefinition Width="6" />
+                        <ColumnDefinition Width="Auto" />  <!-- Reset -->
+                        <ColumnDefinition Width="6" />
+                        <ColumnDefinition Width="Auto" />  <!-- Fit -->
+                        <ColumnDefinition Width="6" />
+                        <ColumnDefinition Width="Auto" />  <!-- Zoom % -->
+                    </Grid.ColumnDefinitions>
+
+                    <Button Grid.Column="0"
+                            Content="Save PNG"
+                            Command="{Binding SavePngCommand}"
+                            Style="{StaticResource BlueButtonStyle}" />
+
+                    <Button Grid.Column="2"
+                            Content="DICOM Folder"
+                            Command="{Binding OpenDicomFolderCommand}"
+                            Style="{StaticResource ToolbarButtonStyle}" />
+
+                    <Button Grid.Column="4"
+                            Content="View DICOM"
+                            Command="{Binding ViewDicomCommand}"
+                            Style="{StaticResource PurpleButtonStyle}" />
+
+                    <Button Grid.Column="6"
+                            Content="New Patient"
+                            Command="{Binding NewPatientCommand}"
+                            Style="{StaticResource GreenButtonStyle}" />
+
+                    <Button Grid.Column="8"
+                            Content="Reset"
+                            Command="{Binding ResetAdjustmentsCommand}"
+                            Style="{StaticResource ToolbarButtonStyle}" />
+
+                    <Button Grid.Column="10"
+                            Content="Fit"
+                            Command="{Binding FitToCanvasCommand}"
+                            Style="{StaticResource ToolbarButtonStyle}" />
+
+                    <TextBlock Grid.Column="12"
+                               Text="{Binding ZoomPercentText, Mode=OneWay}"
+                               Foreground="{StaticResource TextSecondary}"
+                               FontSize="12"
+                               FontFamily="Consolas"
+                               VerticalAlignment="Center"
+                               Margin="4,0,0,0" />
+                </Grid>
+            </StackPanel>
+        </Border>
+
+        <!-- ================================================================ -->
+        <!-- MAIN CONTENT (3 columns: avatar dock | left panel | image)       -->
+        <!-- ================================================================ -->
+        <Grid Margin="0">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="100" />
-                <ColumnDefinition Width="280" />
-                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="88" />   <!-- Avatar Dock -->
+                <ColumnDefinition Width="280" />  <!-- Left Panel -->
+                <ColumnDefinition Width="*" />    <!-- Image Viewer -->
             </Grid.ColumnDefinitions>
 
-            <!-- ══════════════════════════════════════════════════════════════ -->
-            <!-- ── Column 0: Patient Avatar Dock ─────────────────────────── -->
-            <!-- ══════════════════════════════════════════════════════════════ -->
+            <!-- ============================================================ -->
+            <!-- Column 0: Avatar Dock (88px)                                 -->
+            <!-- ============================================================ -->
             <Border Grid.Column="0"
                     Background="{StaticResource PanelBg}"
-                    CornerRadius="12"
-                    Margin="0,0,8,0"
-                    Padding="6"
+                    Padding="4"
                     BorderBrush="{StaticResource BorderBrush}"
-                    BorderThickness="1"
+                    BorderThickness="0,0,1,0"
                     Visibility="{Binding IsDockVisible, Converter={StaticResource BoolToVis}}">
                 <DockPanel>
                     <!-- Search box at top -->
@@ -182,7 +583,7 @@
                              Style="{StaticResource DarkTextBox}"
                              FontSize="10"
                              Padding="6,5"
-                             Margin="0,0,0,4" />
+                             Margin="0,4,0,4" />
 
                     <!-- Status text -->
                     <TextBlock DockPanel.Dock="Top"
@@ -206,12 +607,13 @@
                                         <Button.Template>
                                             <ControlTemplate TargetType="Button">
                                                 <Border x:Name="avatarBorder"
-                                                        Width="80" Height="80"
+                                                        Width="72" Height="72"
                                                         CornerRadius="14"
                                                         Background="#111128"
                                                         BorderBrush="#2A2A4A"
                                                         BorderThickness="2"
                                                         ClipToBounds="True"
+                                                        HorizontalAlignment="Center"
                                                         RenderTransformOrigin="0.5,0.5">
                                                     <Border.RenderTransform>
                                                         <ScaleTransform ScaleX="1" ScaleY="1" />
@@ -236,7 +638,7 @@
                                                             </Border.Style>
                                                             <TextBlock Text="{Binding Initials}"
                                                                        Foreground="White"
-                                                                       FontSize="22"
+                                                                       FontSize="20"
                                                                        FontWeight="Bold"
                                                                        HorizontalAlignment="Center"
                                                                        VerticalAlignment="Center" />
@@ -393,52 +795,28 @@
                 </DockPanel>
             </Border>
 
-            <!-- ══════════════════════════════════════════════════════════════ -->
-            <!-- ── Column 1: Controls Panel ──────────────────────────────── -->
-            <!-- ══════════════════════════════════════════════════════════════ -->
+            <!-- ============================================================ -->
+            <!-- Column 1: Left Panel (280px)                                 -->
+            <!-- ============================================================ -->
             <Border Grid.Column="1"
                     Background="{StaticResource PanelBg}"
-                    CornerRadius="12"
-                    Padding="20"
-                    Margin="0,0,8,0"
+                    Padding="14"
                     BorderBrush="{StaticResource BorderBrush}"
-                    BorderThickness="1">
+                    BorderThickness="0,0,1,0">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled">
                 <StackPanel>
-                    <!-- Logo / Title -->
-                    <Grid Margin="0,0,0,4">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0"
-                                   Text="PureXS"
-                                   Foreground="White"
-                                   FontSize="32"
-                                   FontWeight="Bold" />
-                        <Button Grid.Column="1"
-                                Content="History"
-                                Command="{Binding OpenHistoryCommand}"
-                                Style="{StaticResource ActionButtonStyle}"
-                                FontSize="11"
-                                Padding="10,6"
-                                VerticalAlignment="Center" />
-                    </Grid>
-                    <TextBlock Text="ORTHOPHOS XG Controller"
-                               Foreground="{StaticResource TextSecondary}"
-                               FontSize="12"
-                               Margin="0,0,0,20" />
-
-                    <!-- ── Machine Status ─────────────────────────────────── -->
+                    <!-- ── Machine Status ─────────────────────────────── -->
                     <TextBlock Text="MACHINE"
                                Foreground="{StaticResource TextSecondary}"
                                FontSize="11"
                                FontWeight="SemiBold"
-                               Margin="0,0,0,10" />
+                               Margin="0,0,0,8" />
 
                     <Border Background="#111128"
                             CornerRadius="8"
-                            Padding="14,10"
-                            Margin="0,0,0,20">
+                            Padding="12,8"
+                            Margin="0,0,0,14">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
@@ -454,7 +832,7 @@
                             <TextBlock Grid.Column="1"
                                        Text="{Binding MachineStatus}"
                                        Foreground="{StaticResource TextPrimary}"
-                                       FontSize="13"
+                                       FontSize="12"
                                        TextWrapping="Wrap"
                                        VerticalAlignment="Center" />
                             <Ellipse x:Name="HeartbeatDot"
@@ -466,112 +844,212 @@
                         </Grid>
                     </Border>
 
-                    <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,0,0,20" />
+                    <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,0,0,14" />
 
-                    <!-- ── Selected Patient Card ──────────────────────────── -->
-                    <TextBlock Text="SELECTED PATIENT"
+                    <!-- ── Patient Section ────────────────────────────── -->
+                    <TextBlock Text="Patient"
                                Foreground="#81D4FA"
-                               FontSize="11"
+                               FontSize="12"
                                FontWeight="SemiBold"
                                Margin="0,0,0,10" />
 
-                    <Border Background="#111128"
-                            CornerRadius="10"
-                            Padding="14"
-                            Margin="0,0,0,20"
-                            BorderBrush="{StaticResource BorderBrush}"
-                            BorderThickness="1">
-                        <Grid>
-                            <!-- No patient selected -->
-                            <TextBlock Text="Select a patient from the dock"
-                                       Foreground="#5A5A6A"
-                                       FontSize="12"
-                                       HorizontalAlignment="Center"
-                                       VerticalAlignment="Center"
-                                       Margin="0,8">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
+                    <!-- Patient form (visible when NOT set) -->
+                    <StackPanel>
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsPatientSet}" Value="True">
                                         <Setter Property="Visibility" Value="Collapsed" />
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding SelectedPatient}" Value="{x:Null}">
-                                                <Setter Property="Visibility" Value="Visible" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
 
-                            <!-- Patient info when selected -->
-                            <StackPanel>
-                                <StackPanel.Style>
-                                    <Style TargetType="StackPanel">
-                                        <Setter Property="Visibility" Value="Visible" />
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding SelectedPatient}" Value="{x:Null}">
-                                                <Setter Property="Visibility" Value="Collapsed" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </StackPanel.Style>
-
-                                <TextBlock Foreground="White"
-                                           FontSize="15"
-                                           FontWeight="SemiBold"
-                                           Margin="0,0,0,2">
-                                    <Run Text="{Binding SelectedPatient.FirstName, Mode=OneWay}" />
-                                    <Run Text=" " />
-                                    <Run Text="{Binding SelectedPatient.LastName, Mode=OneWay}" />
-                                </TextBlock>
-                                <TextBlock Text="{Binding SelectedPatient.MedicalRecordNumber}"
-                                           Foreground="#4FC3F7"
-                                           FontSize="11"
-                                           FontFamily="Consolas"
-                                           Margin="0,0,0,6" />
-                                <TextBlock Foreground="{StaticResource TextSecondary}"
-                                           FontSize="11">
-                                    <Run Text="DOB: " />
-                                    <Run Text="{Binding SelectedPatient.Dob, Mode=OneWay}" Foreground="{StaticResource TextPrimary}" />
-                                </TextBlock>
-                                <TextBlock Foreground="{StaticResource TextSecondary}"
-                                           FontSize="11"
-                                           Margin="0,2,0,0">
-                                    <Run Text="Phone: " />
-                                    <Run Text="{Binding SelectedPatient.Phone, Mode=OneWay}" Foreground="{StaticResource TextPrimary}" />
-                                </TextBlock>
-
-                                <!-- Change Patient button -->
-                                <Button Content="Change Patient"
-                                        Command="{Binding ChangePatientCommand}"
-                                        Margin="0,10,0,0"
-                                        Padding="8,6"
-                                        FontSize="11"
-                                        Cursor="Hand">
-                                    <Button.Template>
-                                        <ControlTemplate TargetType="Button">
-                                            <Border x:Name="border"
-                                                    Background="#37474F"
-                                                    CornerRadius="6"
-                                                    Padding="{TemplateBinding Padding}"
-                                                    BorderBrush="#455A64"
-                                                    BorderThickness="1">
-                                                <ContentPresenter HorizontalAlignment="Center"
-                                                                  VerticalAlignment="Center" />
-                                            </Border>
-                                            <ControlTemplate.Triggers>
-                                                <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="border" Property="Background" Value="#455A64" />
-                                                </Trigger>
-                                            </ControlTemplate.Triggers>
-                                        </ControlTemplate>
-                                    </Button.Template>
-                                </Button>
-                            </StackPanel>
+                        <!-- First name -->
+                        <Grid Margin="0,0,0,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="42" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="First:"
+                                       Foreground="{StaticResource TextSecondary}"
+                                       FontSize="11" VerticalAlignment="Center" />
+                            <TextBox Grid.Column="1"
+                                     Text="{Binding PtFirstName, UpdateSourceTrigger=PropertyChanged}"
+                                     Style="{StaticResource DarkTextBox}"
+                                     Tag="First name" />
                         </Grid>
+
+                        <!-- Last name -->
+                        <Grid Margin="0,0,0,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="42" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Last:"
+                                       Foreground="{StaticResource TextSecondary}"
+                                       FontSize="11" VerticalAlignment="Center" />
+                            <TextBox Grid.Column="1"
+                                     Text="{Binding PtLastName, UpdateSourceTrigger=PropertyChanged}"
+                                     Style="{StaticResource DarkTextBox}"
+                                     Tag="Last name" />
+                        </Grid>
+
+                        <!-- DOB -->
+                        <Grid Margin="0,0,0,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="42" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="DOB:"
+                                       Foreground="{StaticResource TextSecondary}"
+                                       FontSize="11" VerticalAlignment="Center" />
+                            <TextBox Grid.Column="1"
+                                     Text="{Binding PtDob, UpdateSourceTrigger=PropertyChanged}"
+                                     Style="{StaticResource DarkTextBox}"
+                                     Tag="MM/DD/YYYY" />
+                        </Grid>
+
+                        <!-- ID -->
+                        <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="42" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="ID:"
+                                       Foreground="{StaticResource TextSecondary}"
+                                       FontSize="11" VerticalAlignment="Center" />
+                            <TextBox Grid.Column="1"
+                                     Text="{Binding PtId, UpdateSourceTrigger=PropertyChanged}"
+                                     Style="{StaticResource DarkTextBox}"
+                                     Tag="(auto if blank)" />
+                        </Grid>
+
+                        <!-- Set + Clear buttons -->
+                        <Grid Margin="0,0,0,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="8" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Button Grid.Column="0"
+                                    Command="{Binding SetPatientCommand}"
+                                    Style="{StaticResource GreenButtonStyle}"
+                                    Padding="10,7">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#x2713; " />
+                                    <TextBlock Text="Set Patient" />
+                                </StackPanel>
+                            </Button>
+                            <Button Grid.Column="2"
+                                    Command="{Binding ClearPatientCommand}"
+                                    Style="{StaticResource ToolbarButtonStyle}"
+                                    Padding="10,7">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#x2717; " />
+                                    <TextBlock Text="Clear" />
+                                </StackPanel>
+                            </Button>
+                        </Grid>
+
+                        <!-- Patient form status -->
+                        <TextBlock Text="{Binding PatientFormStatus}"
+                                   Foreground="{Binding PatientFormStatusColor}"
+                                   FontSize="11"
+                                   Margin="0,0,0,4" />
+                    </StackPanel>
+
+                    <!-- Selected Patient Card (visible when IS set) -->
+                    <Border Margin="0,0,0,4">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsPatientSet}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <Border Background="#111128"
+                                CornerRadius="10"
+                                Padding="14"
+                                BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1">
+                            <Grid>
+                                <!-- No patient selected (PureChart) -->
+                                <TextBlock Text="Select a patient from the dock"
+                                           Foreground="#5A5A6A"
+                                           FontSize="12"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           Margin="0,8">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding SelectedPatient}" Value="{x:Null}">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+
+                                <!-- Patient info when selected -->
+                                <StackPanel>
+                                    <StackPanel.Style>
+                                        <Style TargetType="StackPanel">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding SelectedPatient}" Value="{x:Null}">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </StackPanel.Style>
+
+                                    <TextBlock Foreground="White"
+                                               FontSize="14"
+                                               FontWeight="SemiBold"
+                                               Margin="0,0,0,2">
+                                        <Run Text="{Binding SelectedPatient.FirstName, Mode=OneWay}" />
+                                        <Run Text=" " />
+                                        <Run Text="{Binding SelectedPatient.LastName, Mode=OneWay}" />
+                                    </TextBlock>
+                                    <TextBlock Text="{Binding SelectedPatient.MedicalRecordNumber}"
+                                               Foreground="#4FC3F7"
+                                               FontSize="11"
+                                               FontFamily="Consolas"
+                                               Margin="0,0,0,6" />
+                                    <TextBlock Foreground="{StaticResource TextSecondary}"
+                                               FontSize="11">
+                                        <Run Text="DOB: " />
+                                        <Run Text="{Binding SelectedPatient.Dob, Mode=OneWay}" Foreground="{StaticResource TextPrimary}" />
+                                    </TextBlock>
+                                    <TextBlock Foreground="{StaticResource TextSecondary}"
+                                               FontSize="11"
+                                               Margin="0,2,0,0">
+                                        <Run Text="Phone: " />
+                                        <Run Text="{Binding SelectedPatient.Phone, Mode=OneWay}" Foreground="{StaticResource TextPrimary}" />
+                                    </TextBlock>
+
+                                    <!-- Change Patient button -->
+                                    <Button Content="Change Patient"
+                                            Command="{Binding ChangePatientCommand}"
+                                            Margin="0,10,0,0"
+                                            Style="{StaticResource ToolbarButtonStyle}"
+                                            Padding="8,6"
+                                            FontSize="11" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
                     </Border>
 
-                    <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,0,0,20" />
+                    <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,10,0,14" />
 
-                    <!-- ── Exam Type Selector ─────────────────────────────── -->
+                    <!-- ── Exam Type Selector ─────────────────────────── -->
                     <TextBlock Text="EXAM TYPE"
                                Foreground="{StaticResource TextSecondary}"
                                FontSize="11"
@@ -585,30 +1063,36 @@
                               BorderThickness="1"
                               Padding="8,6"
                               FontSize="12"
-                              Margin="0,0,0,20" />
+                              Margin="0,0,0,14" />
 
-                    <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,0,0,20" />
+                    <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,0,0,14" />
 
-                    <!-- ── EXPOSE Button ───────────────────────────────────── -->
-                    <Button Content="EXPOSE"
-                            Command="{Binding ExposeCommand}"
+                    <!-- ── EXPOSE Button (big, full width) ──────────── -->
+                    <Button Command="{Binding ExposeCommand}"
                             Style="{StaticResource ExposeButtonStyle}"
-                            HorizontalAlignment="Stretch" />
-                    <TextBlock Text="Requires: patient selected + machine ready"
+                            HorizontalAlignment="Stretch">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                            <TextBlock Text="&#x2622; " FontSize="28" VerticalAlignment="Center" />
+                            <TextBlock Text="EXPOSE" FontSize="28" FontWeight="Bold" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+
+                    <!-- Expose count text -->
+                    <TextBlock Text="{Binding ExposeCountText, Mode=OneWay}"
                                Foreground="{StaticResource TextSecondary}"
                                FontSize="11"
                                HorizontalAlignment="Center"
                                Margin="0,8,0,0" />
 
-                    <!-- ── kV Gauge (visible during expose) ──────────────────── -->
-                    <Border Margin="0,20,0,0"
+                    <!-- ── kV Gauge (visible during expose) ──────────── -->
+                    <Border Margin="0,14,0,0"
                             Background="#111128"
                             CornerRadius="6"
                             Padding="12,8"
                             Visibility="{Binding IsKvActive, Converter={StaticResource BoolToVis}}">
                         <StackPanel>
                             <Grid Margin="0,0,0,6">
-                                <TextBlock Text="{Binding KvDisplayText}"
+                                <TextBlock Text="{Binding KvDisplayText, Mode=OneWay}"
                                            Foreground="#4FC3F7"
                                            FontSize="18"
                                            FontWeight="Bold"
@@ -619,7 +1103,7 @@
                                            HorizontalAlignment="Right"
                                            VerticalAlignment="Bottom">
                                     <Run Text="Peak: " />
-                                    <Run Text="{Binding KvPeak, StringFormat='{}{0:F1}'}" />
+                                    <Run Text="{Binding KvPeak, StringFormat='{}{0:F1}', Mode=OneWay}" />
                                     <Run Text=" kV" />
                                 </TextBlock>
                             </Grid>
@@ -631,8 +1115,8 @@
                         </StackPanel>
                     </Border>
 
-                    <!-- ── Scanline Preview (visible during expose) ──────────── -->
-                    <Border Margin="0,12,0,0"
+                    <!-- ── Scanline Preview (visible during expose) ──── -->
+                    <Border Margin="0,10,0,0"
                             Background="#0A0A0A"
                             CornerRadius="6"
                             Padding="4"
@@ -658,307 +1142,165 @@
                                    RenderOptions.BitmapScalingMode="HighQuality" />
                         </StackPanel>
                     </Border>
+
+                    <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,14,0,14" />
+
+                    <!-- ── Upload Controls (visible during review) ───── -->
+                    <StackPanel Visibility="{Binding IsReviewingImage, Converter={StaticResource BoolToVis}}">
+                        <!-- Review status -->
+                        <TextBlock Text="{Binding ReviewStatus}"
+                                   Foreground="{Binding ReviewStatusColor}"
+                                   FontSize="12"
+                                   HorizontalAlignment="Center"
+                                   Margin="0,0,0,10" />
+
+                        <!-- Confirm & Send -->
+                        <Button Command="{Binding ConfirmImageCommand}"
+                                Padding="14,12"
+                                FontSize="14"
+                                FontWeight="SemiBold"
+                                Cursor="Hand"
+                                Margin="0,0,0,8">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="border"
+                                            Background="#1B5E20"
+                                            CornerRadius="8"
+                                            Padding="{TemplateBinding Padding}"
+                                            BorderBrush="#2E7D32"
+                                            BorderThickness="2">
+                                        <ContentPresenter HorizontalAlignment="Center"
+                                                          VerticalAlignment="Center" />
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="border" Property="Background" Value="#2E7D32" />
+                                        </Trigger>
+                                        <Trigger Property="IsEnabled" Value="False">
+                                            <Setter TargetName="border" Property="Background" Value="#2A2A3A" />
+                                            <Setter Property="Foreground" Value="#5A5A6A" />
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                            <TextBlock Text="Confirm &amp; Send" Foreground="White" />
+                        </Button>
+
+                        <!-- Retake -->
+                        <Button Content="Retake"
+                                Command="{Binding RetakeCommand}"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                HorizontalAlignment="Stretch"
+                                Padding="14,10"
+                                FontSize="13"
+                                Margin="0,0,0,8" />
+
+                        <!-- Retry Upload (visible only when upload failed) -->
+                        <Button Content="Retry Upload"
+                                Command="{Binding RetryUploadCommand}"
+                                Style="{StaticResource OrangeButtonStyle}"
+                                HorizontalAlignment="Stretch"
+                                Padding="14,10"
+                                FontSize="13"
+                                Visibility="{Binding IsUploadFailed, Converter={StaticResource BoolToVis}}" />
+                    </StackPanel>
                 </StackPanel>
+                </ScrollViewer>
             </Border>
 
-            <!-- ══════════════════════════════════════════════════════════════ -->
-            <!-- ── Column 2: Image Display ───────────────────────────────── -->
-            <!-- ══════════════════════════════════════════════════════════════ -->
+            <!-- ============================================================ -->
+            <!-- Column 2: Image Viewer                                       -->
+            <!-- ============================================================ -->
             <Border Grid.Column="2"
-                    Background="{StaticResource PanelBg}"
-                    CornerRadius="12"
-                    Padding="20"
-                    BorderBrush="{StaticResource BorderBrush}"
-                    BorderThickness="1">
+                    Background="#0D0D1A"
+                    ClipToBounds="True"
+                    x:Name="ImageContainer">
                 <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
+                    <!-- Placeholder when no image -->
+                    <StackPanel VerticalAlignment="Center"
+                                HorizontalAlignment="Center"
+                                Visibility="{Binding ReceivedImage, Converter={StaticResource BoolToVis}, ConverterParameter=invert, FallbackValue=Visible}">
+                        <TextBlock Text="&#xE8B8;"
+                                   FontFamily="Segoe MDL2 Assets"
+                                   FontSize="64"
+                                   Foreground="#2A2A4A"
+                                   HorizontalAlignment="Center" />
+                        <TextBlock Text="No image received"
+                                   Foreground="#3A3A5A"
+                                   FontSize="14"
+                                   HorizontalAlignment="Center"
+                                   Margin="0,10,0,0" />
+                    </StackPanel>
 
-                    <TextBlock Grid.Row="0"
-                               Text="X-RAY IMAGE"
+                    <!-- Interactive image viewer -->
+                    <Image x:Name="XrayImage"
+                           Source="{Binding DisplayImage}"
+                           Stretch="Uniform"
+                           RenderTransformOrigin="0.5,0.5">
+                        <Image.RenderTransform>
+                            <TransformGroup>
+                                <ScaleTransform x:Name="ImageScale"
+                                               ScaleX="{Binding ZoomLevel}"
+                                               ScaleY="{Binding ZoomLevel}" />
+                                <TranslateTransform x:Name="ImageTranslate"
+                                                   X="{Binding PanX}"
+                                                   Y="{Binding PanY}" />
+                            </TransformGroup>
+                        </Image.RenderTransform>
+                    </Image>
+
+                    <!-- Scan progress overlay -->
+                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center"
+                                Visibility="{Binding IsScanInProgress, Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="&#xE8B8;" FontFamily="Segoe MDL2 Assets" FontSize="48"
+                                   Foreground="#FF9800" HorizontalAlignment="Center" />
+                        <TextBlock Text="{Binding ScanProgressText}" Foreground="#FF9800"
+                                   FontSize="16" HorizontalAlignment="Center" Margin="0,10,0,0" />
+                        <!-- Indeterminate progress bar -->
+                        <ProgressBar IsIndeterminate="True" Height="4" Width="200" Margin="0,10,0,0"
+                                     Foreground="#FF9800" Background="#2A2A4A" />
+                    </StackPanel>
+
+                    <!-- Preview / Edit button overlay (top-right) -->
+                    <Button Content="Preview / Edit"
+                            Command="{Binding OpenPreviewEditCommand}"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Top"
+                            Margin="0,10,10,0"
+                            Padding="14,7"
+                            FontSize="11"
+                            FontWeight="SemiBold"
+                            Foreground="White"
+                            Cursor="Hand"
+                            Visibility="{Binding IsReviewingImage, Converter={StaticResource BoolToVis}}">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="border"
+                                        Background="#CC1565C0"
+                                        CornerRadius="6"
+                                        Padding="{TemplateBinding Padding}">
+                                    <ContentPresenter HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="border" Property="Background" Value="#1976D2" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+
+                    <!-- Zoom percentage overlay -->
+                    <TextBlock Text="{Binding ZoomPercentText, Mode=OneWay}"
                                Foreground="{StaticResource TextSecondary}"
                                FontSize="11"
-                               FontWeight="SemiBold"
-                               Margin="0,0,0,14" />
-
-                    <!-- Image area -->
-                    <Border Grid.Row="1" Background="#0D0D1A" CornerRadius="8"
-                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                            ClipToBounds="True" x:Name="ImageContainer">
-                        <Grid>
-                            <!-- Placeholder when no image -->
-                            <StackPanel VerticalAlignment="Center"
-                                        HorizontalAlignment="Center"
-                                        Visibility="{Binding ReceivedImage, Converter={StaticResource BoolToVis}, ConverterParameter=invert, FallbackValue=Visible}">
-                                <TextBlock Text="&#xE8B8;"
-                                           FontFamily="Segoe MDL2 Assets"
-                                           FontSize="64"
-                                           Foreground="#2A2A4A"
-                                           HorizontalAlignment="Center" />
-                                <TextBlock Text="No image received"
-                                           Foreground="#3A3A5A"
-                                           FontSize="14"
-                                           HorizontalAlignment="Center"
-                                           Margin="0,10,0,0" />
-                            </StackPanel>
-
-                            <!-- Interactive image viewer -->
-                            <Image x:Name="XrayImage"
-                                   Source="{Binding DisplayImage}"
-                                   Stretch="Uniform"
-                                   RenderTransformOrigin="0.5,0.5">
-                                <Image.RenderTransform>
-                                    <TransformGroup>
-                                        <ScaleTransform x:Name="ImageScale"
-                                                       ScaleX="{Binding ZoomLevel}"
-                                                       ScaleY="{Binding ZoomLevel}" />
-                                        <TranslateTransform x:Name="ImageTranslate"
-                                                           X="{Binding PanX}"
-                                                           Y="{Binding PanY}" />
-                                    </TransformGroup>
-                                </Image.RenderTransform>
-                            </Image>
-
-                            <!-- Scan progress overlay -->
-                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center"
-                                        Visibility="{Binding IsScanInProgress, Converter={StaticResource BoolToVis}}">
-                                <TextBlock Text="&#xE8B8;" FontFamily="Segoe MDL2 Assets" FontSize="48"
-                                           Foreground="#FF9800" HorizontalAlignment="Center" />
-                                <TextBlock Text="{Binding ScanProgressText}" Foreground="#FF9800"
-                                           FontSize="16" HorizontalAlignment="Center" Margin="0,10,0,0" />
-                                <!-- Indeterminate progress bar -->
-                                <ProgressBar IsIndeterminate="True" Height="4" Width="200" Margin="0,10,0,0"
-                                             Foreground="#FF9800" Background="#2A2A4A" />
-                            </StackPanel>
-
-                            <!-- Preview / Edit button overlay (top-right) -->
-                            <Button Content="Preview / Edit"
-                                    Command="{Binding OpenPreviewEditCommand}"
-                                    HorizontalAlignment="Right"
-                                    VerticalAlignment="Top"
-                                    Margin="0,10,10,0"
-                                    Padding="14,7"
-                                    FontSize="11"
-                                    FontWeight="SemiBold"
-                                    Foreground="White"
-                                    Cursor="Hand"
-                                    Visibility="{Binding IsReviewingImage, Converter={StaticResource BoolToVis}}">
-                                <Button.Template>
-                                    <ControlTemplate TargetType="Button">
-                                        <Border x:Name="border"
-                                                Background="#CC1565C0"
-                                                CornerRadius="6"
-                                                Padding="{TemplateBinding Padding}">
-                                            <ContentPresenter HorizontalAlignment="Center"
-                                                              VerticalAlignment="Center" />
-                                        </Border>
-                                        <ControlTemplate.Triggers>
-                                            <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter TargetName="border" Property="Background" Value="#1976D2" />
-                                            </Trigger>
-                                        </ControlTemplate.Triggers>
-                                    </ControlTemplate>
-                                </Button.Template>
-                            </Button>
-
-                            <!-- Zoom percentage overlay -->
-                            <TextBlock Text="{Binding ZoomPercentText}"
-                                       Foreground="{StaticResource TextSecondary}"
-                                       FontSize="11"
-                                       FontFamily="Consolas"
-                                       Background="#99111128"
-                                       Padding="6,3"
-                                       HorizontalAlignment="Right"
-                                       VerticalAlignment="Bottom"
-                                       Margin="0,0,8,8" />
-                        </Grid>
-                    </Border>
-
-                    <!-- Review controls (visible only when reviewing) -->
-                    <Border Grid.Row="2"
-                            Margin="0,14,0,0"
-                            Visibility="{Binding IsReviewingImage, Converter={StaticResource BoolToVis}}">
-                        <StackPanel>
-                            <!-- Review status -->
-                            <TextBlock Text="{Binding ReviewStatus}"
-                                       Foreground="{Binding ReviewStatusColor}"
-                                       FontSize="13"
-                                       HorizontalAlignment="Center"
-                                       Margin="0,0,0,12" />
-
-                            <!-- Confirm + Retry + Retake buttons -->
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="12" />
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="8" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-
-                                <!-- Confirm & Send -->
-                                <Button Grid.Column="0"
-                                        Content="Confirm &amp; Send to PureChart"
-                                        Command="{Binding ConfirmImageCommand}"
-                                        Padding="16,12"
-                                        FontSize="15"
-                                        FontWeight="SemiBold"
-                                        Cursor="Hand">
-                                    <Button.Template>
-                                        <ControlTemplate TargetType="Button">
-                                            <Border x:Name="border"
-                                                    Background="#1B5E20"
-                                                    CornerRadius="8"
-                                                    Padding="{TemplateBinding Padding}"
-                                                    BorderBrush="#2E7D32"
-                                                    BorderThickness="2">
-                                                <ContentPresenter HorizontalAlignment="Center"
-                                                                  VerticalAlignment="Center" />
-                                            </Border>
-                                            <ControlTemplate.Triggers>
-                                                <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="border" Property="Background" Value="#2E7D32" />
-                                                </Trigger>
-                                                <Trigger Property="IsEnabled" Value="False">
-                                                    <Setter TargetName="border" Property="Background" Value="#2A2A3A" />
-                                                    <Setter Property="Foreground" Value="#5A5A6A" />
-                                                </Trigger>
-                                            </ControlTemplate.Triggers>
-                                        </ControlTemplate>
-                                    </Button.Template>
-                                </Button>
-
-                                <!-- Retry Upload (visible only when upload failed) -->
-                                <Button Grid.Column="2"
-                                        Content="Retry Upload"
-                                        Command="{Binding RetryUploadCommand}"
-                                        Padding="16,12"
-                                        FontSize="14"
-                                        FontWeight="SemiBold"
-                                        Foreground="White"
-                                        Cursor="Hand"
-                                        Visibility="{Binding IsUploadFailed, Converter={StaticResource BoolToVis}}">
-                                    <Button.Template>
-                                        <ControlTemplate TargetType="Button">
-                                            <Border x:Name="border"
-                                                    Background="#E65100"
-                                                    CornerRadius="8"
-                                                    Padding="{TemplateBinding Padding}"
-                                                    BorderBrush="#FF6D00"
-                                                    BorderThickness="2">
-                                                <ContentPresenter HorizontalAlignment="Center"
-                                                                  VerticalAlignment="Center" />
-                                            </Border>
-                                            <ControlTemplate.Triggers>
-                                                <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="border" Property="Background" Value="#FF6D00" />
-                                                </Trigger>
-                                                <Trigger Property="IsEnabled" Value="False">
-                                                    <Setter TargetName="border" Property="Background" Value="#2A2A3A" />
-                                                    <Setter TargetName="border" Property="BorderBrush" Value="#4A4A5A" />
-                                                    <Setter Property="Foreground" Value="#5A5A6A" />
-                                                </Trigger>
-                                            </ControlTemplate.Triggers>
-                                        </ControlTemplate>
-                                    </Button.Template>
-                                </Button>
-
-                                <!-- Retake -->
-                                <Button Grid.Column="4"
-                                        Content="Retake"
-                                        Command="{Binding RetakeCommand}"
-                                        Padding="16,12"
-                                        FontSize="14"
-                                        Cursor="Hand">
-                                    <Button.Template>
-                                        <ControlTemplate TargetType="Button">
-                                            <Border x:Name="border"
-                                                    Background="#37474F"
-                                                    CornerRadius="8"
-                                                    Padding="{TemplateBinding Padding}"
-                                                    BorderBrush="#455A64"
-                                                    BorderThickness="1">
-                                                <ContentPresenter HorizontalAlignment="Center"
-                                                                  VerticalAlignment="Center" />
-                                            </Border>
-                                            <ControlTemplate.Triggers>
-                                                <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="border" Property="Background" Value="#455A64" />
-                                                </Trigger>
-                                                <Trigger Property="IsEnabled" Value="False">
-                                                    <Setter TargetName="border" Property="Background" Value="#2A2A3A" />
-                                                    <Setter Property="Foreground" Value="#5A5A6A" />
-                                                </Trigger>
-                                            </ControlTemplate.Triggers>
-                                        </ControlTemplate>
-                                    </Button.Template>
-                                </Button>
-                            </Grid>
-
-                            <!-- ── Post-Expose Toolbar ────────────────────── -->
-                            <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,14,0,14" />
-
-                            <!-- Brightness -->
-                            <Grid Margin="0,0,0,8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="70" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0"
-                                           Text="Brightness"
-                                           Foreground="{StaticResource TextSecondary}"
-                                           FontSize="11"
-                                           VerticalAlignment="Center" />
-                                <Slider Grid.Column="1"
-                                        Minimum="-80" Maximum="80"
-                                        Value="{Binding Brightness}"
-                                        Foreground="#4FC3F7"
-                                        VerticalAlignment="Center" />
-                            </Grid>
-
-                            <!-- Contrast -->
-                            <Grid Margin="0,0,0,14">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="70" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0"
-                                           Text="Contrast"
-                                           Foreground="{StaticResource TextSecondary}"
-                                           FontSize="11"
-                                           VerticalAlignment="Center" />
-                                <Slider Grid.Column="1"
-                                        Minimum="0.3" Maximum="3.0"
-                                        Value="{Binding Contrast}"
-                                        TickFrequency="0.1"
-                                        IsSnapToTickEnabled="False"
-                                        Foreground="#4FC3F7"
-                                        VerticalAlignment="Center" />
-                            </Grid>
-
-                            <!-- Action buttons row -->
-                            <WrapPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                                <Button Content="Reset"
-                                        Command="{Binding ResetAdjustmentsCommand}"
-                                        Style="{StaticResource ToolbarButtonStyle}"
-                                        Margin="0,0,8,0" />
-                                <Button Content="Fit"
-                                        Command="{Binding FitToCanvasCommand}"
-                                        Style="{StaticResource ToolbarButtonStyle}"
-                                        Margin="0,0,8,0" />
-                                <Button Content="Save PNG"
-                                        Command="{Binding SavePngCommand}"
-                                        Style="{StaticResource ToolbarButtonStyle}"
-                                        Margin="0,0,8,0" />
-                                <Button Content="New Patient"
-                                        Command="{Binding NewPatientCommand}"
-                                        Style="{StaticResource ToolbarButtonStyle}" />
-                            </WrapPanel>
-                        </StackPanel>
-                    </Border>
+                               FontFamily="Consolas"
+                               Background="#99111128"
+                               Padding="6,3"
+                               HorizontalAlignment="Right"
+                               VerticalAlignment="Bottom"
+                               Margin="0,0,8,8" />
                 </Grid>
             </Border>
         </Grid>

@@ -27,7 +27,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
     // ── Machine state ────────────────────────────────────────────────────
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ExposeCommand))]
-    private string _machineStatus = "Searching for machine...";
+    private string _machineStatus = "Disconnected";
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ExposeCommand))]
@@ -41,7 +41,49 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
     private bool _heartbeatPulse;
 
     [ObservableProperty]
-    private Brush _machineIndicator = Brushes.Yellow;
+    private Brush _machineIndicator = Brushes.Gray;
+
+    // ── Connect/Disconnect control ──────────────────────────────────────
+    [ObservableProperty]
+    private string _connectButtonText = "Connect to Device";
+
+    [ObservableProperty]
+    private bool _isConnectEnabled = true;
+
+    // ── HB status text ──────────────────────────────────────────────────
+    [ObservableProperty]
+    private string _hbStatusText = "HB: --";
+
+    private DateTime _lastHeartbeatTime = DateTime.MinValue;
+
+    // ── Patient entry form ──────────────────────────────────────────────
+    [ObservableProperty]
+    private string _ptFirstName = "";
+
+    [ObservableProperty]
+    private string _ptLastName = "";
+
+    [ObservableProperty]
+    private string _ptDob = "";
+
+    [ObservableProperty]
+    private string _ptId = "";
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(ExposeCommand))]
+    private bool _isPatientSet;
+
+    [ObservableProperty]
+    private string _patientFormStatus = "";
+
+    [ObservableProperty]
+    private Brush _patientFormStatusColor = Brushes.Transparent;
+
+    // ── Expose counter ──────────────────────────────────────────────────
+    [ObservableProperty]
+    private int _exposeCount;
+
+    public string ExposeCountText => $"Exposures this session: {ExposeCount}";
 
     // ── Scan progress state ─────────────────────────────────────────────
     [ObservableProperty]
@@ -199,7 +241,6 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         _sirona.ScanlineReceived += OnScanlineReceived;
 
         _log.Log("PureXS application started");
-        _ = AutoConnectAsync();
         _ = LoadInitialPatientsAsync();
     }
 
@@ -219,25 +260,92 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         });
     }
 
-    // ── Auto-connect ─────────────────────────────────────────────────────
+    // ── Connect / Disconnect ─────────────────────────────────────────────
 
-    private async Task AutoConnectAsync()
+    [RelayCommand]
+    private async Task ToggleConnectionAsync()
     {
-        MachineStatus = "Searching for machine...";
-        MachineIndicator = Brushes.Yellow;
+        if (IsConnected)
+        {
+            // Disconnect
+            await _sirona.DisconnectAsync();
+            ConnectButtonText = "Connect to Device";
+            MachineStatus = "Disconnected";
+            MachineIndicator = Brushes.Gray;
+            IsConnected = false;
+            HbStatusText = "HB: --";
+            _toast.Show("Disconnected", "info", 2000);
+        }
+        else
+        {
+            // Connect
+            ConnectButtonText = "Connecting...";
+            IsConnectEnabled = false;
+            MachineStatus = "Searching for machine...";
+            MachineIndicator = Brushes.Yellow;
 
-        try
-        {
-            await _sirona.ConnectAsync();
+            try
+            {
+                await _sirona.ConnectAsync();
+                // OnConnectionStateChanged will handle the rest
+            }
+            catch (Exception ex)
+            {
+                MachineStatus = $"Connection failed: {ex.Message}";
+                MachineIndicator = Brushes.Red;
+                ConnectButtonText = "Connect to Device";
+                IsConnectEnabled = true;
+                _toast.Show($"Connection failed: {ex.Message}", "error", 5000);
+            }
         }
-        catch (Exception ex)
+    }
+
+    // ── Patient entry form commands ─────────────────────────────────────
+
+    [RelayCommand]
+    private void SetPatient()
+    {
+        // Validate
+        if (string.IsNullOrWhiteSpace(PtFirstName) || string.IsNullOrWhiteSpace(PtLastName))
         {
-            MachineStatus = "Machine not found — retrying...";
-            MachineIndicator = Brushes.Red;
-            _log.Log($"Connection failed: {ex.Message}", "warning");
-            await Task.Delay(3000);
-            _ = AutoConnectAsync();
+            PatientFormStatus = "First and Last name required";
+            PatientFormStatusColor = new SolidColorBrush(Color.FromRgb(239, 83, 80));
+            return;
         }
+
+        // Generate ID if blank
+        if (string.IsNullOrWhiteSpace(PtId))
+            PtId = Guid.NewGuid().ToString("N")[..8];
+
+        IsPatientSet = true;
+        PatientFormStatus = "";
+
+        // Update patient banner
+        PatientBanner = $"Patient: {PtLastName}, {PtFirstName} | DOB: {PtDob} | {SelectedExamType}";
+
+        _log.Log($"Patient set: {PtLastName}, {PtFirstName} (ID: {PtId})");
+        _toast.Show($"Patient: {PtFirstName} {PtLastName}", "success", 2000);
+
+        // Notify expose eligibility
+        ExposeCommand.NotifyCanExecuteChanged();
+    }
+
+    [RelayCommand]
+    private void ClearPatient()
+    {
+        PtFirstName = "";
+        PtLastName = "";
+        PtDob = "";
+        PtId = "";
+        IsPatientSet = false;
+        PatientFormStatus = "";
+        PatientBanner = "";
+
+        // Also clear PureChart selection if any
+        SelectedPatient = null;
+        IsDockVisible = true;
+
+        ExposeCommand.NotifyCanExecuteChanged();
     }
 
     // ── Expose ───────────────────────────────────────────────────────────
@@ -261,7 +369,8 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             _scanlines.Clear();
             ScanlineCount = 0;
             ScanlinePreviewImage = null;
-            _log.Log($"Expose started for patient {SelectedPatient?.Id}, exam={SelectedExamType}");
+            var patientDesc = SelectedPatient?.Id ?? PtId;
+            _log.Log($"Expose started for patient {patientDesc}, exam={SelectedExamType}");
             _toast.Show("Exposure started", "info", 2000);
             await _sirona.ExposeAsync();
         }
@@ -274,7 +383,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    private bool CanExpose() => IsConnected && !IsExposing && !IsReviewingImage && SelectedPatient is not null;
+    private bool CanExpose() => IsConnected && !IsExposing && !IsReviewingImage && (IsPatientSet || SelectedPatient is not null);
 
     // ── Image review + upload ────────────────────────────────────────────
 
@@ -437,9 +546,13 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         // Clear patient
         SelectedPatient = null;
 
-        // Disconnect and reconnect (stops HB, restarts discovery)
+        // Disconnect
         await _sirona.DisconnectAsync();
-        _ = AutoConnectAsync();
+        ConnectButtonText = "Connect to Device";
+        MachineStatus = "Disconnected";
+        MachineIndicator = Brushes.Gray;
+        IsConnected = false;
+        HbStatusText = "HB: --";
     }
 
     // ── Image viewer commands ────────────────────────────────────────────
@@ -471,6 +584,10 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         if (SelectedPatient is not null)
         {
             defaultFilename = $"{SelectedPatient.LastName}_{SelectedPatient.FirstName}_{timestamp}_panoramic.png";
+        }
+        else if (IsPatientSet)
+        {
+            defaultFilename = $"{PtLastName}_{PtFirstName}_{timestamp}_panoramic.png";
         }
         else
         {
@@ -509,6 +626,16 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         IsScanInProgress = false;
         ScanByteCount = 0;
         ScanProgressText = "";
+
+        // Clear patient form fields
+        PtFirstName = "";
+        PtLastName = "";
+        PtDob = "";
+        PtId = "";
+        IsPatientSet = false;
+        PatientFormStatus = "";
+        PatientBanner = "";
+        IsDockVisible = true;
     }
 
     [RelayCommand]
@@ -585,6 +712,11 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(HasDicomFile));
     }
 
+    partial void OnExposeCountChanged(int value)
+    {
+        OnPropertyChanged(nameof(ExposeCountText));
+    }
+
     // ── Image adjustment helper ─────────────────────────────────────────
 
     private void ApplyImageAdjustments()
@@ -634,8 +766,16 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
     {
         if (value is not null)
         {
+            // Auto-fill form from PureChart
+            PtFirstName = value.FirstName;
+            PtLastName = value.LastName;
+            PtDob = value.Dob;
+            PtId = value.Id;
+            IsPatientSet = true;
             PatientBanner = $"Patient: {value.LastName}, {value.FirstName} | DOB: {value.Dob} | MRN: {value.MedicalRecordNumber}";
             IsDockVisible = false;
+            PatientFormStatus = "";
+            ExposeCommand.NotifyCanExecuteChanged();
         }
         else
         {
@@ -772,16 +912,17 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             switch (state)
             {
                 case ConnectionState.Disconnected:
-                    // Only auto-reconnect if we're not in review mode (reset handles it)
+                    MachineStatus = "Disconnected";
+                    MachineIndicator = Brushes.Gray;
+                    IsConnected = false;
+                    IsExposing = false;
+                    ConnectButtonText = "Connect to Device";
+                    IsConnectEnabled = true;
+                    HbStatusText = "HB: --";
                     if (!IsReviewingImage)
                     {
-                        MachineStatus = "Machine disconnected — reconnecting...";
-                        MachineIndicator = Brushes.Red;
-                        IsConnected = false;
-                        IsExposing = false;
                         _toast.Show("Machine disconnected", "warning", 4000);
                         _log.Log("Machine disconnected", "warning");
-                        _ = AutoConnectAsync();
                     }
                     break;
                 case ConnectionState.Connecting:
@@ -794,6 +935,8 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                     MachineIndicator = Brushes.LimeGreen;
                     IsConnected = true;
                     IsExposing = false;
+                    ConnectButtonText = "Disconnect";
+                    IsConnectEnabled = true;
                     _toast.Show("Machine connected", "success", 3000);
                     _log.Log("Machine connected");
                     break;
@@ -807,6 +950,8 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                     MachineIndicator = Brushes.Yellow;
                     IsConnected = false;
                     IsExposing = false;
+                    ConnectButtonText = "Reconnecting...";
+                    IsConnectEnabled = false;
                     _toast.Show("Reconnecting to machine...", "warning", 3000);
                     _log.Log("Reconnecting to machine", "warning");
                     break;
@@ -816,7 +961,21 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private void OnHeartbeatTick(object? sender, EventArgs e)
     {
-        Application.Current.Dispatcher.Invoke(() => HeartbeatPulse = !HeartbeatPulse);
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            var now = DateTime.UtcNow;
+            if (_lastHeartbeatTime != DateTime.MinValue)
+            {
+                var elapsed = (now - _lastHeartbeatTime).TotalSeconds;
+                HbStatusText = $"HB: {elapsed:F1}s";
+            }
+            else
+            {
+                HbStatusText = "HB: OK";
+            }
+            _lastHeartbeatTime = now;
+            HeartbeatPulse = !HeartbeatPulse;
+        });
     }
 
     private void OnScanProgress(object? sender, int byteCount)
@@ -971,6 +1130,9 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                 MachineIndicator = new SolidColorBrush(Color.FromRgb(79, 195, 247));
                 ReviewStatus = "Review the image with the patient";
                 ReviewStatusColor = new SolidColorBrush(Color.FromRgb(79, 195, 247));
+
+                // Increment expose counter
+                ExposeCount++;
 
                 _toast.Show("Scan complete -- ready for review", "success", 3000);
                 _log.Log($"Image displayed, {displayBytes.Length} bytes, decoded={processedBytes is not null}");

@@ -34,8 +34,32 @@ public partial class App : Application
             // Wire up dependencies
             var host = Environment.GetEnvironmentVariable("SIRONA_IP") ?? "192.168.139.170";
             var port = int.TryParse(Environment.GetEnvironmentVariable("SIRONA_PORT"), out var p) ? p : 12837;
+
+            // Config service — loads persisted settings from %AppData%/PureXS/config.json
+            IConfigService config = new ConfigService();
+
+            // Resolve facility token: env var > persisted config > first-launch prompt
             var facilityToken = Environment.GetEnvironmentVariable("PURECHART_FACILITY_TOKEN")
-                ?? "43bd5ee3a662f5cbf468bfc6402eb56ec685fb315461114275b4204402a2cf17";
+                ?? config.FacilityToken;
+
+            if (string.IsNullOrWhiteSpace(facilityToken))
+            {
+                var dialog = new FacilityTokenDialog();
+                if (dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(dialog.Token))
+                {
+                    facilityToken = dialog.Token;
+                    config.SaveFacilityToken(facilityToken);
+                }
+                else
+                {
+                    MessageBox.Show(
+                        "No facility token was provided.\nPureChart cloud features will be unavailable.",
+                        "PureXS",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    facilityToken = string.Empty;
+                }
+            }
 
             ISironaService sirona = new SironaService(host, port);
             IPureChartService pureChart = new PureChartService(facilityToken);
