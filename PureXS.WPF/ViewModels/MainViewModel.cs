@@ -239,6 +239,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         _sirona.ScanProgress += OnScanProgress;
         _sirona.KvChanged += OnKvChanged;
         _sirona.ScanlineReceived += OnScanlineReceived;
+        _sirona.ExposeStarted += OnExposeStarted;
 
         _log.Log("PureXS application started");
         _ = LoadInitialPatientsAsync();
@@ -353,15 +354,35 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
     [RelayCommand(CanExecute = nameof(CanExpose))]
     private async Task ExposeAsync()
     {
+        var patientName = $"{PtLastName}, {PtFirstName}";
+        var exam = SelectedExamType;
+
+        // Confirmation dialog (matches purexs_gui.py)
+        var result = MessageBox.Show(
+            $"Arm device for {exam} expose?\n\n" +
+            $"Patient: {patientName}\n" +
+            $"DOB: {PtDob}  |  ID: {PtId}\n\n" +
+            "After clicking Yes:\n" +
+            "  1. Press R on the Orthophos keypad (gantry to patient position)\n" +
+            "  2. Verify laser crosshairs are visible and aligned\n" +
+            "  3. Press the physical EXPOSE button on the unit\n\n" +
+            "The unit will not fire until the gantry is in position.",
+            "Confirm Expose",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+
+        if (result != MessageBoxResult.Yes)
+        {
+            _log.Log("Expose cancelled by user");
+            return;
+        }
+
         try
         {
             _lastImageBytes = null;
             ReceivedImage = null;
             IsReviewingImage = false;
             ReviewStatus = "";
-            IsScanInProgress = true;
-            ScanByteCount = 0;
-            ScanProgressText = "Waiting for scan data...";
             // Reset live kV + scanline state
             CurrentKv = 0;
             KvPeak = 0;
@@ -369,17 +390,27 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             _scanlines.Clear();
             ScanlineCount = 0;
             ScanlinePreviewImage = null;
-            var patientDesc = SelectedPatient?.Id ?? PtId;
-            _log.Log($"Expose started for patient {patientDesc}, exam={SelectedExamType}");
-            _toast.Show("Exposure started", "info", 2000);
-            await _sirona.ExposeAsync();
+
+            MachineStatus = "Arming device...";
+            MachineIndicator = new SolidColorBrush(Color.FromRgb(255, 111, 0)); // orange
+            _log.Log($"Arming device for patient {PtId}, exam={exam}");
+
+            // Arm the device — sends CAPS_REQ + patient DATA_SEND
+            await _sirona.ArmForExposeAsync(PtLastName, PtFirstName);
+
+            // Device is now armed — update UI
+            MachineStatus = "ARMED — press R, then press EXPOSE button on unit";
+            MachineIndicator = new SolidColorBrush(Color.FromRgb(255, 167, 38)); // amber
+            _toast.Show("Device ARMED — press EXPOSE on unit", "warning", 8000);
+            _log.Log("Device armed — waiting for physical expose button");
         }
         catch (Exception ex)
         {
-            MachineStatus = $"Expose error — {ex.Message}";
+            MachineStatus = $"Arm failed — {ex.Message}";
             MachineIndicator = Brushes.Red;
-            _toast.Show($"Expose error: {ex.Message}", "error", 5000);
-            _log.Log($"Expose error: {ex.Message}", "error");
+            IsScanInProgress = false;
+            _toast.Show($"Arm error: {ex.Message}", "error", 5000);
+            _log.Log($"Arm error: {ex.Message}", "error");
         }
     }
 
@@ -940,10 +971,20 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                     _toast.Show("Machine connected", "success", 3000);
                     _log.Log("Machine connected");
                     break;
+                case ConnectionState.Armed:
+                    MachineStatus = "ARMED — press R, then EXPOSE button";
+                    MachineIndicator = new SolidColorBrush(Color.FromRgb(255, 167, 38));
+                    IsConnected = true;
+                    IsExposing = false;
+                    break;
                 case ConnectionState.Exposing:
-                    MachineStatus = "Exposing...";
+                    MachineStatus = "☢ EXPOSING — receiving scan data...";
                     MachineIndicator = Brushes.Orange;
                     IsExposing = true;
+                    IsScanInProgress = true;
+                    ScanByteCount = 0;
+                    ScanProgressText = "Receiving scan data...";
+                    IsKvActive = true;
                     break;
                 case ConnectionState.Reconnecting:
                     MachineStatus = "Reconnecting to machine...";
@@ -975,6 +1016,17 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             }
             _lastHeartbeatTime = now;
             HeartbeatPulse = !HeartbeatPulse;
+        });
+    }
+
+    private void OnExposeStarted(object? sender, EventArgs e)
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            _toast.Show("☢ Exposure started — receiving scan data", "warning", 4000);
+            _log.Log("Physical expose button pressed — scan data incoming");
+            ExposeCount++;
+            OnPropertyChanged(nameof(ExposeCountText));
         });
     }
 
@@ -1219,6 +1271,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         _sirona.ScanProgress -= OnScanProgress;
         _sirona.KvChanged -= OnKvChanged;
         _sirona.ScanlineReceived -= OnScanlineReceived;
+        _sirona.ExposeStarted -= OnExposeStarted;
         _log.Log("PureXS application shutting down");
         await _sirona.DisposeAsync();
         if (_pureChart is IDisposable disposable)

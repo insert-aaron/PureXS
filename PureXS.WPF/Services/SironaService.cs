@@ -26,6 +26,11 @@ public sealed class SironaService : ISironaService
     private const ushort FC_SESSION_INIT = 0x2001;
     private const ushort FC_HB_REQUEST = 0x200B;
     private const ushort FC_HB_RESPONSE = 0x200C;
+    private const ushort FC_CAPS_REQ = 0x2110;
+    private const ushort FC_CAPS_RESP = 0x2111;
+    private const ushort FC_DATA_SEND = 0x1000;
+    private const ushort FC_DATA_ACK = 0x1001;
+    private const ushort FC_EXPOSE_NOTIFY = 0x1005;
     private const ushort FC_IMAGE_ACK = 0x1008;
 
     // Post-scan disconnect marker
@@ -54,6 +59,7 @@ public sealed class SironaService : ISironaService
     private ConnectionState _state = ConnectionState.Disconnected;
     private Stopwatch _sessionTimer = new();
     private DateTime _lastHeartbeatTime = DateTime.MinValue;
+    private bool _armed;
 
     // Live parsing state
     private int _kvParseOffset;
@@ -79,6 +85,12 @@ public sealed class SironaService : ISironaService
 
     /// <inheritdoc />
     public event EventHandler<int>? ScanProgress;
+
+    /// <inheritdoc />
+    public event EventHandler? DeviceArmed;
+
+    /// <inheritdoc />
+    public event EventHandler? ExposeStarted;
 
     /// <inheritdoc />
     public ConnectionState State => _state;
@@ -177,25 +189,76 @@ public sealed class SironaService : ISironaService
     }
 
     /// <inheritdoc />
-    public async Task ExposeAsync(CancellationToken ct = default)
+    public async Task ArmForExposeAsync(string lastName = "test", string firstName = "test", CancellationToken ct = default)
     {
         if (_state != ConnectionState.Connected)
-            throw new InvalidOperationException($"Cannot expose in state {_state}.");
+            throw new InvalidOperationException($"Cannot arm in state {_state}.");
 
         if (_stream is null)
             throw new InvalidOperationException("No active network stream.");
 
-        _session.IsExposing = true;
+        // Reset scan state
         _session.ImageBuffer.Clear();
         _kvParseOffset = 0;
         _scanlineParseOffset = 0;
         _lastKvFired = 0;
-        SetState(ConnectionState.Exposing);
 
-        // Note: expose is triggered by the physical button on the Orthophos,
-        // not by a software command. The device sends EXPOSE_NOTIFY (0x1005)
-        // when the button is pressed. We just need to be in ARMED state
-        // (patient data sent) and listening.
+        // 1. Fresh session refresh (matches Python: no prior HB before CAPS)
+        await SessionRefreshAsync(ct);
+        Debug.WriteLine("[Sirona] Fresh session for arm (no prior HB)");
+
+        // 2. CAPS_REQ → CAPS_RESP
+        await SendSessionFrameAsync(FC_CAPS_REQ, ct: ct);
+        try
+        {
+            using var capsCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            capsCts.CancelAfter(3000);
+            var resp = await ReceiveFrameAsync(capsCts.Token);
+            var fc = resp.Length >= 2 ? (ushort)((resp[0] << 8) | resp[1]) : (ushort)0;
+            Debug.WriteLine(fc == FC_CAPS_RESP
+                ? $"[Sirona] CAPS_RESP received ({resp.Length} bytes)"
+                : $"[Sirona] Expected CAPS_RESP (0x2111), got 0x{fc:X4} — continuing");
+        }
+        catch (OperationCanceledException)
+        {
+            Debug.WriteLine("[Sirona] CAPS_RESP timeout — continuing");
+        }
+
+        // 3. DATA_SEND (patient payload) + continuation
+        var payload = DataSendTemplate; // 156-byte known-good payload
+        var totalLen = (ushort)(payload.Length + DataContinuation.Length);
+        var header = BuildSessionHeader(FC_DATA_SEND, payloadLength: totalLen);
+        var frame = new byte[header.Length + payload.Length + DataContinuation.Length];
+        header.CopyTo(frame, 0);
+        payload.CopyTo(frame, header.Length);
+        DataContinuation.CopyTo(frame, header.Length + payload.Length);
+
+        await _stream.WriteAsync(frame, ct);
+        await _stream.FlushAsync(ct);
+        Debug.WriteLine($"[Sirona] DATA_SEND: {payload.Length}B payload + {DataContinuation.Length}B continuation");
+
+        // 4. Wait for DATA_ACK (0x1001)
+        try
+        {
+            using var ackCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            ackCts.CancelAfter(5000);
+            var resp = await ReceiveFrameAsync(ackCts.Token);
+            var fc = resp.Length >= 2 ? (ushort)((resp[0] << 8) | resp[1]) : (ushort)0;
+            Debug.WriteLine(fc == FC_DATA_ACK
+                ? "[Sirona] DATA_ACK received — device armed"
+                : $"[Sirona] Expected DATA_ACK (0x1001), got 0x{fc:X4}");
+        }
+        catch (OperationCanceledException)
+        {
+            Debug.WriteLine("[Sirona] DATA_ACK timeout — device may not be armed");
+        }
+
+        // Device is now armed — waiting for physical button press
+        _armed = true;
+        _session.IsExposing = false; // not yet — waiting for EXPOSE_NOTIFY
+        SetState(ConnectionState.Armed);
+        DeviceArmed?.Invoke(this, EventArgs.Empty);
+        Debug.WriteLine("[Sirona] Device ARMED — press R on keypad, then press EXPOSE button");
     }
 
     /// <inheritdoc />
@@ -203,6 +266,49 @@ public sealed class SironaService : ISironaService
     {
         await DisconnectAsync();
     }
+
+    // ── Patient data payloads (from Python hb_decoder.py, confirmed working) ──
+
+    /// <summary>
+    /// 156-byte DATA_SEND payload from ff.txt frame 750.
+    /// Patient "test test", Doctor "Dr. Demo". Device does not validate
+    /// these fields for exposure — they are for DICOM metadata only.
+    /// </summary>
+    private static readonly byte[] DataSendTemplate = [
+        0xfc,0x30,0x00,0x00,0x1f,0x00,0x05,0x00,0xe6,0x07,0x11,0x00,
+        0x0f,0x00,0x29,0x00,0xfa,0x00,0xdb,0x04,0x9b,0x08,0x00,0x04,
+        0x00,0x74,0x00,0x65,0x00,0x73,0x00,0x74,0x00,0x04,0x00,0x74,
+        0x00,0x65,0x00,0x73,0x00,0x74,0x00,0x01,0x00,0x01,0x07,0xd1,
+        0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+        0x00,0x08,0x00,0x44,0x00,0x72,0x00,0x2e,0x00,0x20,0x00,0x44,
+        0x00,0x65,0x00,0x6d,0x00,0x6f,0x00,0x00,0x00,0x14,0x00,0x30,
+        0x00,0x30,0x00,0x33,0x00,0x31,0x00,0x30,0x00,0x35,0x00,0x32,
+        0x00,0x30,0x00,0x32,0x00,0x32,0x00,0x31,0x00,0x37,0x00,0x31,
+        0x00,0x35,0x00,0x34,0x00,0x31,0x00,0x30,0x00,0x32,0x00,0x35,
+        0x00,0x30,0x00,0x0f,0x00,0x44,0x00,0x45,0x00,0x53,0x00,0x4b,
+        0x00,0x54,0x00,0x4f,0x00,0x50,0x00,0x2d,0x00,0x4e,0x00,0x4b,
+        0x00,0x36,0x00,0x55,0x00,0x46,0x00,0x4d,0x00,0x4c,0x00,0x05,
+    ];
+
+    /// <summary>
+    /// Continuation data sent immediately after DATA_SEND payload.
+    /// Contains program parameters (panoramic mode, etc.).
+    /// </summary>
+    private static readonly byte[] DataContinuation = [
+        0x00,0x01,0x00,0x01,0x00,0x00,0x00,0x00,
+        0x00,0x2c,0x00,0x02,0x00,0x01,0x00,0x00,
+        0x00,0x00,0x00,0x2c,0x00,0x03,0x00,0x01,
+        0x00,0x00,0x00,0x00,0x00,0x2c,0x00,0x01,
+        0x00,0x02,0x00,0x00,0x00,0x00,0x00,0x2c,
+        0x00,0x02,0x00,0x02,0x00,0x00,0x00,0x00,
+        0x00,0x2c,0x00,0x00,0x00,0x00,0x00,0x04,
+        0x00,0x08,0x00,0x01,0x00,0x0a,0x00,0x03,
+        0xff,0xff,0x00,0x00,0x00,0x00,0x00,0x00,
+        0x00,0x05,0x00,0x00,0x00,0x02,0xff,0xff,
+        0x00,0x03,0x00,0x03,0x00,0x00,0x00,0x05,
+        0xff,0xff,0x00,0x00,0x00,0x00,0x00,0x05,
+        0xff,0xff,0x00,0x05,0xff,0xff,
+    ];
 
     // ── P2K Frame building ─────────────────────────────────────────────────
 
@@ -266,11 +372,12 @@ public sealed class SironaService : ISironaService
                 // Don't send HB during expose — device is flooding data
                 if (!_session.IsExposing)
                 {
-                    // Session refresh if needed (matches Python SESSION_REFRESH_S = 1.5)
-                    if (_sessionTimer.Elapsed.TotalSeconds >= SessionRefreshSeconds)
+                    // Session refresh if needed — but NOT when armed
+                    // (session must survive until scan completes)
+                    if (!_armed && _sessionTimer.Elapsed.TotalSeconds >= SessionRefreshSeconds)
                     {
                         await SessionRefreshAsync(ct);
-                        continue; // skip HB this cycle, refresh resets timer
+                        continue;
                     }
 
                     // Send HB_REQUEST
@@ -339,12 +446,13 @@ public sealed class SironaService : ISironaService
                 if (bytesRead == 0)
                     break;
 
-                var data = buffer.AsMemory(0, bytesRead);
+                var data = buffer[..bytesRead];
 
                 // Check for post-scan disconnect marker: E7 14 02
-                if (ContainsSequence(data.Span, PostScanDisconnect))
+                if (ContainsSequence(data, PostScanDisconnect))
                 {
                     _session.IsPostScanDisconnect = true;
+                    _armed = false;
 
                     if (_session.IsExposing)
                     {
@@ -363,10 +471,32 @@ public sealed class SironaService : ISironaService
                     return;
                 }
 
+                // Detect EXPOSE_NOTIFY (0x1005) — physical button pressed
+                if (_armed && !_session.IsExposing && bytesRead >= 2)
+                {
+                    var fc = (ushort)((data[0] << 8) | data[1]);
+                    if (fc == FC_EXPOSE_NOTIFY)
+                    {
+                        Debug.WriteLine($"[Sirona] EXPOSE_NOTIFY received — exposure starting! {bytesRead} bytes");
+                        _session.IsExposing = true;
+                        SetState(ConnectionState.Exposing);
+                        ExposeStarted?.Invoke(this, EventArgs.Empty);
+
+                        // Seed the image buffer with any payload after the header
+                        if (bytesRead > SESSION_HEADER_SIZE)
+                        {
+                            var payload = data[SESSION_HEADER_SIZE..];
+                            _session.ImageBuffer.AddRange(payload);
+                            Debug.WriteLine($"[Sirona] Seeded scan buffer with {payload.Length} bytes from EXPOSE_NOTIFY");
+                        }
+                        continue;
+                    }
+                }
+
                 // Buffer image bytes during expose
                 if (_session.IsExposing)
                 {
-                    _session.ImageBuffer.AddRange(data.Span.ToArray());
+                    _session.ImageBuffer.AddRange(data);
                     ScanProgress?.Invoke(this, _session.ImageBuffer.Count);
 
                     ParseLiveKvSamples();
@@ -545,12 +675,20 @@ public sealed class SironaService : ISironaService
         ConnectionStateChanged?.Invoke(this, newState);
     }
 
-    private static bool ContainsSequence(ReadOnlySpan<byte> data, ReadOnlySpan<byte> sequence)
+    private static bool ContainsSequence(byte[] data, byte[] sequence)
     {
         for (var i = 0; i <= data.Length - sequence.Length; i++)
         {
-            if (data.Slice(i, sequence.Length).SequenceEqual(sequence))
-                return true;
+            var match = true;
+            for (var j = 0; j < sequence.Length; j++)
+            {
+                if (data[i + j] != sequence[j])
+                {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) return true;
         }
         return false;
     }

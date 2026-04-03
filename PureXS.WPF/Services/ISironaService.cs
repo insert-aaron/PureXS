@@ -1,7 +1,7 @@
 namespace PureXS.Services;
 
 /// <summary>
-/// Abstraction over the Sirona ORTHOPHOS XG TCP protocol for testability.
+/// Abstraction over the Sirona ORTHOPHOS XG TCP protocol.
 /// </summary>
 public interface ISironaService : IAsyncDisposable
 {
@@ -23,6 +23,12 @@ public interface ISironaService : IAsyncDisposable
     /// <summary>Raised periodically during exposure with the number of bytes received so far.</summary>
     event EventHandler<int>? ScanProgress;
 
+    /// <summary>Raised when device is armed and waiting for physical button press.</summary>
+    event EventHandler? DeviceArmed;
+
+    /// <summary>Raised when the physical expose button is pressed (EXPOSE_NOTIFY 0x1005).</summary>
+    event EventHandler? ExposeStarted;
+
     /// <summary>Current connection state.</summary>
     ConnectionState State { get; }
 
@@ -32,8 +38,12 @@ public interface ISironaService : IAsyncDisposable
     /// <summary>Disconnect gracefully.</summary>
     Task DisconnectAsync();
 
-    /// <summary>Send the expose trigger packet to start a panoramic scan.</summary>
-    Task ExposeAsync(CancellationToken ct = default);
+    /// <summary>
+    /// Arm the device for exposure: sends CAPS_REQ + patient DATA_SEND.
+    /// After this call, the device waits for the physical expose button.
+    /// The ExposeStarted event fires when the button is pressed.
+    /// </summary>
+    Task ArmForExposeAsync(string lastName = "test", string firstName = "test", CancellationToken ct = default);
 }
 
 /// <summary>
@@ -44,6 +54,7 @@ public enum ConnectionState
     Disconnected,
     Connecting,
     Connected,
+    Armed,
     Exposing,
     Reconnecting
 }
