@@ -807,7 +807,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         if (query.Length < 2)
         {
             if (query.Length == 0)
-                await RunSearchAsync("a", token);
+                await RunSearchAsync("", token);
             else
             {
                 PureChartStatus = "Type 2+ characters...";
@@ -861,9 +861,9 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private async Task LoadInitialPatientsAsync()
     {
-        PureChartStatus = "Loading patients...";
+        PureChartStatus = "Loading today's patients...";
         PureChartStatusColor = new SolidColorBrush(Color.FromRgb(255, 167, 38));
-        await RunSearchAsync("a", CancellationToken.None);
+        await RunSearchAsync("", CancellationToken.None);
     }
 
     private async Task LoadProfileImagesAsync(List<PureChartPatient> patients, CancellationToken ct)
