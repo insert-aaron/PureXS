@@ -54,7 +54,19 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
     [ObservableProperty]
     private string _hbStatusText = "HB: --";
 
+    // ── Phase label (during expose flow) ────────────────────────────────
+    [ObservableProperty]
+    private string _phaseLabel = "";
+
+    [ObservableProperty]
+    private Brush _phaseLabelColor = Brushes.Transparent;
+
+    // ── Heartbeat animation color ───────────────────────────────────────
+    [ObservableProperty]
+    private Brush _heartbeatColor = new SolidColorBrush(Color.FromRgb(66, 66, 66));
+
     private DateTime _lastHeartbeatTime = DateTime.MinValue;
+    private Stopwatch _exposeTimer = new();
 
     // ── Patient entry form ──────────────────────────────────────────────
     [ObservableProperty]
@@ -393,6 +405,8 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
 
             MachineStatus = "Arming device...";
             MachineIndicator = new SolidColorBrush(Color.FromRgb(255, 111, 0)); // orange
+            PhaseLabel = "Phase 1: pre-exposure — arming device";
+            PhaseLabelColor = new SolidColorBrush(Color.FromRgb(255, 167, 38));
             _log.Log($"Arming device for patient {PtId}, exam={exam}");
 
             // Arm the device — sends CAPS_REQ + patient DATA_SEND
@@ -401,6 +415,9 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             // Device is now armed — update UI
             MachineStatus = "ARMED — press R, then press EXPOSE button on unit";
             MachineIndicator = new SolidColorBrush(Color.FromRgb(255, 167, 38)); // amber
+            PhaseLabel = "Phase 1: ARMED — waiting for physical button press";
+            PhaseLabelColor = new SolidColorBrush(Color.FromRgb(255, 167, 38));
+            _exposeTimer.Restart();
             _toast.Show("Device ARMED — press EXPOSE on unit", "warning", 8000);
             _log.Log("Device armed — waiting for physical expose button");
         }
@@ -1016,6 +1033,20 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             }
             _lastHeartbeatTime = now;
             HeartbeatPulse = !HeartbeatPulse;
+
+            // Pulse heart color: systole (bright red) → diastole (dim red)
+            HeartbeatColor = HeartbeatPulse
+                ? new SolidColorBrush(Color.FromRgb(244, 67, 54))   // #F44336 systole
+                : new SolidColorBrush(Color.FromRgb(136, 14, 79));  // #880E4F diastole
+
+            // Schedule dim back after 120ms
+            var dimTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
+            dimTimer.Tick += (_, _) =>
+            {
+                dimTimer.Stop();
+                HeartbeatColor = new SolidColorBrush(Color.FromRgb(136, 14, 79)); // diastole
+            };
+            dimTimer.Start();
         });
     }
 
@@ -1023,10 +1054,10 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
     {
         Application.Current.Dispatcher.Invoke(() =>
         {
+            PhaseLabel = "Phase 2: ☢ EXPOSING — kV ramp + scan data";
+            PhaseLabelColor = new SolidColorBrush(Color.FromRgb(255, 111, 0));
             _toast.Show("☢ Exposure started — receiving scan data", "warning", 4000);
             _log.Log("Physical expose button pressed — scan data incoming");
-            ExposeCount++;
-            OnPropertyChanged(nameof(ExposeCountText));
         });
     }
 
@@ -1126,15 +1157,20 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private async Task ProcessAndDisplayImageAsync(byte[] rawBytes)
     {
+        var exposeElapsed = _exposeTimer.Elapsed.TotalSeconds;
+        _exposeTimer.Stop();
+
         Application.Current.Dispatcher.Invoke(() =>
         {
             IsScanInProgress = false;
             MachineStatus = "Processing image...";
             MachineIndicator = new SolidColorBrush(Color.FromRgb(255, 167, 38)); // orange
+            PhaseLabel = "Phase 3: processing — reconstructing panoramic";
+            PhaseLabelColor = new SolidColorBrush(Color.FromRgb(79, 195, 247));
             IsExposing = false;
         });
 
-        _log.Log($"Image received, {rawBytes.Length} raw bytes, processing...");
+        _log.Log($"Image received, {rawBytes.Length} raw bytes, elapsed={exposeElapsed:F1}s, processing...");
         _toast.Show("Processing scan image...", "info", 2000);
 
         // Run the decoder — produces a finished panoramic PNG
@@ -1182,6 +1218,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                 MachineIndicator = new SolidColorBrush(Color.FromRgb(79, 195, 247));
                 ReviewStatus = "Review the image with the patient";
                 ReviewStatusColor = new SolidColorBrush(Color.FromRgb(79, 195, 247));
+                PhaseLabel = "";
 
                 // Increment expose counter
                 ExposeCount++;
@@ -1196,10 +1233,54 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             }
         });
 
-        // Auto-export DICOM in background if patient is selected
+        // Auto-save patient output (events log, panoramic PNG, sessions.json)
+        if (IsPatientSet && _lastImageBytes is not null)
+        {
+            _ = SavePatientOutputAsync(exposeElapsed);
+        }
+
+        // Auto-export DICOM in background if PureChart patient is selected
         if (SelectedPatient is not null && _lastImageBytes is not null)
         {
             _ = ExportDicomInBackgroundAsync(SelectedPatient, _lastImageBytes);
+        }
+    }
+
+    private async Task SavePatientOutputAsync(double exposeElapsed)
+    {
+        try
+        {
+            var patientId = SelectedPatient?.Id ?? PtId;
+            var patientDir = _patientOutput.GetPatientDirectory(patientId, PtLastName, PtFirstName);
+            var filePrefix = _patientOutput.GetFilePrefix(PtLastName, PtFirstName, PtDob);
+
+            // 1. Save panoramic PNG
+            string? panoFile = null;
+            if (_lastImageBytes is not null)
+            {
+                panoFile = await _patientOutput.SavePanoramicAsync(patientDir, filePrefix, _lastImageBytes);
+                _log.Log($"Panoramic saved: {panoFile}");
+            }
+
+            // 2. Save events log
+            await _patientOutput.SaveEventsLogAsync(
+                patientDir, filePrefix, SelectedExamType,
+                ScanlineCount, KvPeak, exposeElapsed);
+            var eventsLogFile = $"{filePrefix}_events.log";
+            _log.Log($"Events log saved: {eventsLogFile}");
+
+            // 3. Append to sessions.json
+            await _patientOutput.AppendSessionAsync(
+                patientDir, SelectedExamType, KvPeak, ScanlineCount,
+                panoFile is not null ? Path.GetFileName(panoFile) : null,
+                eventsLogFile,
+                LastDcmPath is not null ? Path.GetFileName(LastDcmPath) : null);
+            _log.Log($"Session appended to sessions.json for patient {patientId}");
+        }
+        catch (Exception ex)
+        {
+            _log.Log($"Patient output save error: {ex.Message}", "error");
+            _toast.Show("Failed to save patient data", "error", 4000);
         }
     }
 

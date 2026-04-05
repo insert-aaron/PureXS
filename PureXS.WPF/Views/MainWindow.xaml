@@ -405,22 +405,12 @@
                     <ColumnDefinition Width="Auto" />  <!-- Expose count -->
                 </Grid.ColumnDefinitions>
 
-                <!-- Heart icon — red when connected, gray when not -->
+                <!-- Heart icon — pulses via HeartbeatColor binding -->
                 <TextBlock Grid.Column="0"
                            Text="&#x2764;"
                            FontSize="12"
-                           VerticalAlignment="Center">
-                    <TextBlock.Style>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="Foreground" Value="#424242" />
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsConnected}" Value="True">
-                                    <Setter Property="Foreground" Value="#F44336" />
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </TextBlock.Style>
-                </TextBlock>
+                           Foreground="{Binding HeartbeatColor}"
+                           VerticalAlignment="Center" />
 
                 <!-- HB status text -->
                 <TextBlock Grid.Column="2"
@@ -843,6 +833,25 @@
                                      VerticalAlignment="Center" />
                         </Grid>
                     </Border>
+
+                    <!-- Phase label (visible during expose flow) -->
+                    <TextBlock Text="{Binding PhaseLabel}"
+                               Foreground="{Binding PhaseLabelColor}"
+                               FontSize="10"
+                               FontStyle="Italic"
+                               TextWrapping="Wrap"
+                               Margin="0,4,0,8">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding PhaseLabel}" Value="">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
 
                     <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,0,0,14" />
 
