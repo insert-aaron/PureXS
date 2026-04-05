@@ -1006,7 +1006,7 @@
                                     </TextBlock.Style>
                                 </TextBlock>
 
-                                <!-- Patient info when selected -->
+                                <!-- Patient info when selected (rich profile card) -->
                                 <StackPanel>
                                     <StackPanel.Style>
                                         <Style TargetType="StackPanel">
@@ -1019,35 +1019,111 @@
                                         </Style>
                                     </StackPanel.Style>
 
-                                    <TextBlock Foreground="White"
-                                               FontSize="14"
-                                               FontWeight="SemiBold"
-                                               Margin="0,0,0,2">
-                                        <Run Text="{Binding SelectedPatient.FirstName, Mode=OneWay}" />
-                                        <Run Text=" " />
-                                        <Run Text="{Binding SelectedPatient.LastName, Mode=OneWay}" />
-                                    </TextBlock>
-                                    <TextBlock Text="{Binding SelectedPatient.MedicalRecordNumber}"
-                                               Foreground="#4FC3F7"
-                                               FontSize="11"
-                                               FontFamily="Consolas"
-                                               Margin="0,0,0,6" />
-                                    <TextBlock Foreground="{StaticResource TextSecondary}"
-                                               FontSize="11">
-                                        <Run Text="DOB: " />
-                                        <Run Text="{Binding SelectedPatient.Dob, Mode=OneWay}" Foreground="{StaticResource TextPrimary}" />
-                                    </TextBlock>
-                                    <TextBlock Foreground="{StaticResource TextSecondary}"
-                                               FontSize="11"
-                                               Margin="0,2,0,0">
-                                        <Run Text="Phone: " />
-                                        <Run Text="{Binding SelectedPatient.Phone, Mode=OneWay}" Foreground="{StaticResource TextPrimary}" />
-                                    </TextBlock>
+                                    <Grid Margin="0,0,0,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="64" />
+                                            <ColumnDefinition Width="10" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- 64x64 Avatar circle -->
+                                        <Border Grid.Column="0"
+                                                Width="64" Height="64"
+                                                CornerRadius="32"
+                                                Background="#0F3460"
+                                                BorderBrush="#546E7A"
+                                                BorderThickness="2"
+                                                ClipToBounds="True">
+                                            <Grid>
+                                                <!-- Profile picture (if available) -->
+                                                <Image Source="{Binding SelectedPatient.ProfileImage, Mode=OneWay}"
+                                                       Stretch="UniformToFill"
+                                                       RenderOptions.BitmapScalingMode="HighQuality" />
+                                                <!-- Initials fallback -->
+                                                <Border Background="#0F3460">
+                                                    <Border.Style>
+                                                        <Style TargetType="Border">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding SelectedPatient.HasProfileImage, Mode=OneWay}" Value="True">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Border.Style>
+                                                    <TextBlock Text="{Binding SelectedPatient.Initials, Mode=OneWay}"
+                                                               Foreground="#B0BEC5"
+                                                               FontSize="20"
+                                                               FontWeight="Bold"
+                                                               HorizontalAlignment="Center"
+                                                               VerticalAlignment="Center" />
+                                                </Border>
+                                            </Grid>
+                                        </Border>
+
+                                        <!-- Name + details -->
+                                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                            <TextBlock Foreground="White"
+                                                       FontSize="14"
+                                                       FontWeight="SemiBold"
+                                                       TextTrimming="CharacterEllipsis">
+                                                <Run Text="{Binding SelectedPatient.FirstName, Mode=OneWay}" />
+                                                <Run Text=" " />
+                                                <Run Text="{Binding SelectedPatient.LastName, Mode=OneWay}" />
+                                            </TextBlock>
+                                            <TextBlock Text="{Binding SelectedPatient.MedicalRecordNumber, Mode=OneWay}"
+                                                       Foreground="#4FC3F7"
+                                                       FontSize="10"
+                                                       FontFamily="Consolas"
+                                                       Margin="0,2,0,0" />
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <!-- Details grid -->
+                                    <Grid Margin="0,0,0,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="48" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+
+                                        <TextBlock Grid.Row="0" Grid.Column="0"
+                                                   Text="DOB"
+                                                   Foreground="{StaticResource TextSecondary}"
+                                                   FontSize="11" Margin="0,0,0,3" />
+                                        <TextBlock Grid.Row="0" Grid.Column="1"
+                                                   Text="{Binding SelectedPatient.Dob, Mode=OneWay}"
+                                                   Foreground="{StaticResource TextPrimary}"
+                                                   FontSize="11" Margin="0,0,0,3" />
+
+                                        <TextBlock Grid.Row="1" Grid.Column="0"
+                                                   Text="Phone"
+                                                   Foreground="{StaticResource TextSecondary}"
+                                                   FontSize="11" Margin="0,0,0,3" />
+                                        <TextBlock Grid.Row="1" Grid.Column="1"
+                                                   Text="{Binding SelectedPatient.Phone, Mode=OneWay}"
+                                                   Foreground="{StaticResource TextPrimary}"
+                                                   FontSize="11" Margin="0,0,0,3" />
+
+                                        <TextBlock Grid.Row="2" Grid.Column="0"
+                                                   Text="Email"
+                                                   Foreground="{StaticResource TextSecondary}"
+                                                   FontSize="11" />
+                                        <TextBlock Grid.Row="2" Grid.Column="1"
+                                                   Text="{Binding SelectedPatient.Email, Mode=OneWay}"
+                                                   Foreground="{StaticResource TextPrimary}"
+                                                   FontSize="11"
+                                                   TextTrimming="CharacterEllipsis" />
+                                    </Grid>
 
                                     <!-- Change Patient button -->
                                     <Button Content="Change Patient"
                                             Command="{Binding ChangePatientCommand}"
-                                            Margin="0,10,0,0"
+                                            Margin="0,6,0,0"
                                             Style="{StaticResource ToolbarButtonStyle}"
                                             Padding="8,6"
                                             FontSize="11" />
