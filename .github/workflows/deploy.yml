@@ -120,13 +120,17 @@ jobs:
         shell: pwsh
 
       - name: Commit and push to PureXS-releases
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
           cd releases-repo
           git config user.name "PureXS CI"
           git config user.email "ci@purexs.local"
           git add -A
           git diff --cached --quiet && echo "No changes to deploy" && exit 0
-          git commit -m "PureXS ${{ env.VERSION }} — ${{ github.event.head_commit.message }}"
+          # Use only the first line of the source commit message (safe for shell)
+          FIRST_LINE=$(echo "$COMMIT_MSG" | head -n 1)
+          git commit -m "PureXS ${VERSION} -- ${FIRST_LINE}"
           git push origin main
-          echo "Deployed ${{ env.VERSION }}"
+          echo "Deployed ${VERSION}"
         shell: bash
