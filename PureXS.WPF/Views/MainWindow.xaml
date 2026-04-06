@@ -624,13 +624,28 @@
         <!-- ================================================================ -->
         <Grid Margin="0">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="88" />   <!-- Avatar Dock -->
+                <!-- Avatar Dock: 88px collapsed, 280px when search expanded -->
+                <ColumnDefinition>
+                    <ColumnDefinition.Style>
+                        <Style TargetType="ColumnDefinition">
+                            <Setter Property="Width" Value="88" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsSearchExpanded}" Value="True">
+                                    <Setter Property="Width" Value="280" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding IsDockVisible}" Value="False">
+                                    <Setter Property="Width" Value="0" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ColumnDefinition.Style>
+                </ColumnDefinition>
                 <ColumnDefinition Width="280" />  <!-- Left Panel -->
                 <ColumnDefinition Width="*" />    <!-- Image Viewer -->
             </Grid.ColumnDefinitions>
 
             <!-- ============================================================ -->
-            <!-- Column 0: Avatar Dock (88px)                                 -->
+            <!-- Column 0: Avatar Dock (88px collapsed / 280px expanded)      -->
             <!-- ============================================================ -->
             <Border Grid.Column="0"
                     Background="{StaticResource PanelBg}"
@@ -639,13 +654,73 @@
                     BorderThickness="0,0,1,0"
                     Visibility="{Binding IsDockVisible, Converter={StaticResource BoolToVis}}">
                 <DockPanel>
-                    <!-- Search box at top -->
+                    <!-- Search icon button (always visible at top) -->
+                    <Button DockPanel.Dock="Top"
+                            Command="{Binding ToggleSearchCommand}"
+                            Cursor="Hand"
+                            Margin="0,4,0,2"
+                            HorizontalAlignment="Center">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="searchBtnBorder"
+                                        Background="#111128"
+                                        CornerRadius="8"
+                                        Padding="8,6"
+                                        BorderBrush="#2A2A4A"
+                                        BorderThickness="1">
+                                    <StackPanel Orientation="Horizontal"
+                                                HorizontalAlignment="Center">
+                                        <TextBlock Text="&#xE721;"
+                                                   FontFamily="Segoe MDL2 Assets"
+                                                   FontSize="14"
+                                                   Foreground="#4FC3F7"
+                                                   VerticalAlignment="Center" />
+                                        <!-- "Search" label only when expanded -->
+                                        <TextBlock Text="  Search Patients"
+                                                   Foreground="#B0BEC5"
+                                                   FontSize="11"
+                                                   VerticalAlignment="Center">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding DataContext.IsSearchExpanded, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="searchBtnBorder" Property="Background" Value="#1A2A44" />
+                                        <Setter TargetName="searchBtnBorder" Property="BorderBrush" Value="#4FC3F7" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+
+                    <!-- Expanded search field (visible only when expanded) -->
                     <TextBox DockPanel.Dock="Top"
+                             x:Name="PatientSearchBox"
                              Text="{Binding PureChartSearchQuery, UpdateSourceTrigger=PropertyChanged}"
-                             Style="{StaticResource DarkTextBox}"
-                             FontSize="10"
-                             Padding="6,5"
-                             Margin="0,4,0,4" />
+                             FontSize="12"
+                             Margin="0,4,0,4">
+                        <TextBox.Style>
+                            <Style TargetType="TextBox" BasedOn="{StaticResource DarkTextBox}">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Setter Property="Padding" Value="8,6" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsSearchExpanded}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBox.Style>
+                    </TextBox>
 
                     <!-- Status text -->
                     <TextBlock DockPanel.Dock="Top"

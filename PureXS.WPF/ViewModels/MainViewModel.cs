@@ -206,6 +206,17 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
     private bool _isDockVisible = true;
 
     [ObservableProperty]
+    private bool _isSearchExpanded;
+
+    [RelayCommand]
+    private void ToggleSearch()
+    {
+        IsSearchExpanded = !IsSearchExpanded;
+        if (!IsSearchExpanded)
+            PureChartSearchQuery = ""; // clear search on collapse → reloads today's patients
+    }
+
+    [ObservableProperty]
     private string _patientBanner = "";
 
     [ObservableProperty]

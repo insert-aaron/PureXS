@@ -36,6 +36,16 @@ public partial class MainWindow : Window
                 : WindowState.Maximized;
         };
         CloseBtn.Click += (_, _) => Close();
+
+        // Auto-focus search box when search expands
+        PatientSearchBox.IsVisibleChanged += (_, e) =>
+        {
+            if (PatientSearchBox.Visibility == Visibility.Visible)
+            {
+                PatientSearchBox.Focus();
+                PatientSearchBox.SelectAll();
+            }
+        };
     }
 
     // ── Custom title bar drag ───────────────────────────────────────────
