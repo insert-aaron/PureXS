@@ -581,17 +581,20 @@
                     <Button Grid.Column="0"
                             Content="Save PNG"
                             Command="{Binding SavePngCommand}"
-                            Style="{StaticResource BlueButtonStyle}" />
+                            Style="{StaticResource BlueButtonStyle}"
+                            Visibility="{Binding HasImage, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
 
                     <Button Grid.Column="2"
                             Content="DICOM Folder"
                             Command="{Binding OpenDicomFolderCommand}"
-                            Style="{StaticResource ToolbarButtonStyle}" />
+                            Style="{StaticResource ToolbarButtonStyle}"
+                            Visibility="{Binding HasImage, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
 
                     <Button Grid.Column="4"
                             Content="View DICOM"
                             Command="{Binding ViewDicomCommand}"
-                            Style="{StaticResource PurpleButtonStyle}" />
+                            Style="{StaticResource PurpleButtonStyle}"
+                            Visibility="{Binding HasImage, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
 
                     <Button Grid.Column="6"
                             Content="New Patient"
