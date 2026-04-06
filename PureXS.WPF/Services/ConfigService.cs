@@ -9,6 +9,8 @@ public class ConfigService : IConfigService
     private readonly string _configDir;
     private readonly string _configPath;
     private string? _facilityToken;
+    private string? _sironaHost;
+    private int? _sironaPort;
 
     public ConfigService()
     {
@@ -24,31 +26,50 @@ public class ConfigService : IConfigService
 
     public string ConfigDirectory => _configDir;
 
+    public string? SironaHost => _sironaHost;
+
+    public int? SironaPort => _sironaPort;
+
     public void SaveFacilityToken(string token)
     {
         _facilityToken = token;
+        SaveField("facility_token", token);
+    }
 
-        // Read existing config to preserve other fields
-        JsonObject root;
+    public void SaveSironaEndpoint(string host, int port)
+    {
+        _sironaHost = host;
+        _sironaPort = port;
+
+        var root = LoadRoot();
+        root["sirona_host"] = host;
+        root["sirona_port"] = port;
+        WriteRoot(root);
+    }
+
+    private void SaveField(string key, string value)
+    {
+        var root = LoadRoot();
+        root[key] = value;
+        WriteRoot(root);
+    }
+
+    private JsonObject LoadRoot()
+    {
         if (File.Exists(_configPath))
         {
             try
             {
                 var existing = File.ReadAllText(_configPath);
-                root = JsonNode.Parse(existing)?.AsObject() ?? new JsonObject();
+                return JsonNode.Parse(existing)?.AsObject() ?? new JsonObject();
             }
-            catch
-            {
-                root = new JsonObject();
-            }
+            catch { }
         }
-        else
-        {
-            root = new JsonObject();
-        }
+        return new JsonObject();
+    }
 
-        root["facility_token"] = token;
-
+    private void WriteRoot(JsonObject root)
+    {
         Directory.CreateDirectory(_configDir);
         var options = new JsonSerializerOptions { WriteIndented = true };
         File.WriteAllText(_configPath, root.ToJsonString(options));
@@ -64,6 +85,10 @@ public class ConfigService : IConfigService
             var json = File.ReadAllText(_configPath);
             var root = JsonNode.Parse(json)?.AsObject();
             _facilityToken = root?["facility_token"]?.GetValue<string>();
+            _sironaHost = root?["sirona_host"]?.GetValue<string>();
+            var portNode = root?["sirona_port"];
+            if (portNode is not null)
+                _sironaPort = portNode.GetValue<int>();
         }
         catch
         {

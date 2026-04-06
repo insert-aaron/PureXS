@@ -29,6 +29,9 @@ public interface ISironaService : IAsyncDisposable
     /// <summary>Raised when the physical expose button is pressed (EXPOSE_NOTIFY 0x1005).</summary>
     event EventHandler? ExposeStarted;
 
+    /// <summary>Raised during auto-discovery with status messages.</summary>
+    event EventHandler<string>? DiscoveryStatus;
+
     /// <summary>Current connection state.</summary>
     ConnectionState State { get; }
 
@@ -52,6 +55,7 @@ public interface ISironaService : IAsyncDisposable
 public enum ConnectionState
 {
     Disconnected,
+    Discovering,
     Connecting,
     Connected,
     Armed,

@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
+using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using PureXS.Models;
 
@@ -46,10 +48,13 @@ public sealed class SironaService : ISironaService
     private const int ScanlinePixels = 240;
 
     // ── Configuration ───────────────────────────────────────────────────────
-    private readonly string _host;
-    private readonly int _port;
+    private string _host;
+    private int _port;
+    private readonly string _defaultHost;
+    private readonly int _defaultPort;
     private readonly int _maxReconnectAttempts;
     private readonly TimeSpan _reconnectDelay;
+    private readonly IConfigService? _config;
 
     // ── State ───────────────────────────────────────────────────────────────
     private TcpClient? _tcp;
@@ -92,6 +97,9 @@ public sealed class SironaService : ISironaService
     /// <inheritdoc />
     public event EventHandler? ExposeStarted;
 
+    /// <summary>Raised during auto-discovery with status messages for the UI.</summary>
+    public event EventHandler<string>? DiscoveryStatus;
+
     /// <inheritdoc />
     public ConnectionState State => _state;
 
@@ -99,12 +107,16 @@ public sealed class SironaService : ISironaService
         string host = "192.168.139.170",
         int port = 12837,
         int maxReconnectAttempts = 5,
-        TimeSpan? reconnectDelay = null)
+        TimeSpan? reconnectDelay = null,
+        IConfigService? config = null)
     {
         _host = host;
         _port = port;
+        _defaultHost = host;
+        _defaultPort = port;
         _maxReconnectAttempts = maxReconnectAttempts;
         _reconnectDelay = reconnectDelay ?? TimeSpan.FromSeconds(2);
+        _config = config;
     }
 
     // ── Public API ──────────────────────────────────────────────────────────
@@ -119,13 +131,82 @@ public sealed class SironaService : ISironaService
 
         SetState(ConnectionState.Connecting);
 
-        _tcp = new TcpClient();
-        _tcp.ReceiveTimeout = 10000;
-        _tcp.SendTimeout = 5000;
-        await _tcp.ConnectAsync(_host, _port, _sessionCts.Token);
-        _stream = _tcp.GetStream();
+        // Try configured host first (quick 3s timeout)
+        if (!await TryTcpConnectAsync(_host, _port, TimeSpan.FromSeconds(3), ct))
+        {
+            Debug.WriteLine($"[Sirona] Direct connect to {_host}:{_port} failed — starting discovery");
+
+            // Auto-discover on the local network
+            SetState(ConnectionState.Discovering);
+            DiscoveryStatus?.Invoke(this, "Scanning network for Sirona device...");
+
+            var discovered = await DiscoverSironaAsync(_port, ct);
+
+            if (discovered is null)
+            {
+                SetState(ConnectionState.Disconnected);
+                throw new ConnectionException(
+                    $"Could not find Sirona device on {_host}:{_port} or local network.\n" +
+                    "Verify the device is powered on and connected to this network.");
+            }
+
+            _host = discovered.Value.host;
+            _port = discovered.Value.port;
+
+            // Persist so next launch connects instantly
+            _config?.SaveSironaEndpoint(_host, _port);
+            DiscoveryStatus?.Invoke(this, $"Found Sirona at {_host}:{_port}");
+            Debug.WriteLine($"[Sirona] Discovered device at {_host}:{_port}");
+
+            SetState(ConnectionState.Connecting);
+
+            // Connect to the discovered address
+            if (!await TryTcpConnectAsync(_host, _port, TimeSpan.FromSeconds(5), ct))
+                throw new ConnectionException($"Found Sirona at {_host}:{_port} but handshake failed.");
+        }
+
+        _stream = _tcp!.GetStream();
 
         // ── P2K Session Handshake ──────────────────────────────────────
+        await PerformHandshakeAsync(ct);
+
+        _sessionTimer.Restart();
+        SetState(ConnectionState.Connected);
+
+        // Start heartbeat and reader loops
+        _ = HeartbeatLoopAsync(_sessionCts.Token);
+        _ = ReaderLoopAsync(_sessionCts.Token);
+    }
+
+    /// <summary>
+    /// Attempts a raw TCP connect with timeout. Stores TcpClient in _tcp on success.
+    /// </summary>
+    private async Task<bool> TryTcpConnectAsync(string host, int port, TimeSpan timeout, CancellationToken ct)
+    {
+        try
+        {
+            _tcp?.Dispose();
+            _tcp = new TcpClient { ReceiveTimeout = 10000, SendTimeout = 5000 };
+            using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            connectCts.CancelAfter(timeout);
+            await _tcp.ConnectAsync(host, port, connectCts.Token);
+            return true;
+        }
+        catch (Exception ex) when (ex is SocketException or OperationCanceledException or ObjectDisposedException)
+        {
+            Debug.WriteLine($"[Sirona] TCP connect to {host}:{port} failed: {ex.Message}");
+            _tcp?.Dispose();
+            _tcp = null;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// P2K handshake: SESSION_OPEN_REQ + SESSION_INIT.
+    /// Extracted so ConnectAsync and ReconnectAsync can share it.
+    /// </summary>
+    private async Task PerformHandshakeAsync(CancellationToken ct)
+    {
         // Step 1: SESSION_OPEN_REQ (optional — some firmware ignores it)
         await SendSessionFrameAsync(FC_SESSION_OPEN_REQ, flags: 0x000F, ct);
 
@@ -159,13 +240,111 @@ public sealed class SironaService : ISironaService
         {
             Debug.WriteLine("[Sirona] SESSION_INIT response timeout — proceeding anyway");
         }
+    }
 
-        _sessionTimer.Restart();
-        SetState(ConnectionState.Connected);
+    // ── Auto-discovery ──────────────────────────────────────────────────
 
-        // Start heartbeat and reader loops
-        _ = HeartbeatLoopAsync(_sessionCts.Token);
-        _ = ReaderLoopAsync(_sessionCts.Token);
+    /// <summary>
+    /// Scans all local network subnets for a Sirona device accepting TCP on
+    /// the given port (and fallback 1999). Mirrors purexs_gui.py _discover_sirona_tcp.
+    /// Uses 50 concurrent probes with 300ms timeout per IP — full scan takes ~2s.
+    /// </summary>
+    private async Task<(string host, int port)?> DiscoverSironaAsync(int primaryPort, CancellationToken ct)
+    {
+        var subnets = GetLocalSubnets();
+        var localIps = new HashSet<string>(
+            NetworkInterface.GetAllNetworkInterfaces()
+                .Where(n => n.OperationalStatus == OperationalStatus.Up)
+                .SelectMany(n => n.GetIPProperties().UnicastAddresses)
+                .Where(a => a.Address.AddressFamily == AddressFamily.InterNetwork)
+                .Select(a => a.Address.ToString()));
+
+        var ports = new List<int> { primaryPort };
+        if (primaryPort != 1999) ports.Add(1999);
+
+        foreach (var subnet in subnets)
+        {
+            DiscoveryStatus?.Invoke(this, $"Scanning {subnet}1-254...");
+            Debug.WriteLine($"[Sirona] Discovery: scanning {subnet}1-254 on ports {string.Join(",", ports)}");
+
+            var result = await ScanSubnetAsync(subnet, ports, localIps, ct);
+            if (result is not null)
+                return result;
+        }
+
+        return null;
+    }
+
+    private async Task<(string host, int port)?> ScanSubnetAsync(
+        string subnet, List<int> ports, HashSet<string> localIps, CancellationToken ct)
+    {
+        var tcs = new TaskCompletionSource<(string host, int port)?>();
+        using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        scanCts.CancelAfter(TimeSpan.FromSeconds(15));
+
+        var semaphore = new SemaphoreSlim(50); // 50 concurrent probes
+        var tasks = new List<Task>();
+
+        for (var i = 1; i <= 254; i++)
+        {
+            var ip = $"{subnet}{i}";
+            if (localIps.Contains(ip)) continue;
+
+            tasks.Add(Task.Run(async () =>
+            {
+                await semaphore.WaitAsync(scanCts.Token);
+                try
+                {
+                    foreach (var port in ports)
+                    {
+                        if (scanCts.IsCancellationRequested) return;
+                        try
+                        {
+                            using var tcp = new TcpClient();
+                            using var probeCts = CancellationTokenSource.CreateLinkedTokenSource(scanCts.Token);
+                            probeCts.CancelAfter(300); // 300ms per probe — matches Python
+                            await tcp.ConnectAsync(ip, port, probeCts.Token);
+                            // Connection succeeded — this is our device
+                            tcs.TrySetResult((ip, port));
+                            scanCts.Cancel(); // stop other probes
+                            return;
+                        }
+                        catch { /* not this IP/port */ }
+                    }
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+            }, scanCts.Token));
+        }
+
+        // Wait for either a discovery or all probes to finish
+        var allDone = Task.WhenAll(tasks).ContinueWith(_ => tcs.TrySetResult(null), TaskScheduler.Default);
+        return await tcs.Task;
+    }
+
+    /// <summary>
+    /// Gets all local IPv4 subnet prefixes (e.g. "192.168.139.") from active interfaces.
+    /// </summary>
+    private static List<string> GetLocalSubnets()
+    {
+        var subnets = new HashSet<string>();
+        foreach (var iface in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (iface.OperationalStatus != OperationalStatus.Up) continue;
+            if (iface.NetworkInterfaceType is NetworkInterfaceType.Loopback) continue;
+
+            foreach (var addr in iface.GetIPProperties().UnicastAddresses)
+            {
+                if (addr.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+                var parts = addr.Address.ToString().Split('.');
+                var subnet = $"{parts[0]}.{parts[1]}.{parts[2]}.";
+                subnets.Add(subnet);
+            }
+        }
+
+        return subnets.ToList();
     }
 
     /// <inheritdoc />

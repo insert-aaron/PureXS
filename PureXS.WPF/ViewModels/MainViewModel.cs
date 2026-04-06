@@ -252,6 +252,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         _sirona.KvChanged += OnKvChanged;
         _sirona.ScanlineReceived += OnScanlineReceived;
         _sirona.ExposeStarted += OnExposeStarted;
+        _sirona.DiscoveryStatus += OnDiscoveryStatus;
 
         _log.Log("PureXS application started");
         _ = LoadInitialPatientsAsync();
@@ -973,13 +974,21 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                         _log.Log("Machine disconnected", "warning");
                     }
                     break;
+                case ConnectionState.Discovering:
+                    MachineStatus = "Scanning network for Sirona device...";
+                    MachineIndicator = Brushes.Yellow;
+                    IsConnected = false;
+                    ConnectButtonText = "Discovering...";
+                    IsConnectEnabled = false;
+                    _log.Log("Auto-discovering Sirona device on network", "info");
+                    break;
                 case ConnectionState.Connecting:
-                    MachineStatus = "Searching for machine...";
+                    MachineStatus = "Connecting to machine...";
                     MachineIndicator = Brushes.Yellow;
                     IsConnected = false;
                     break;
                 case ConnectionState.Connected:
-                    MachineStatus = "Machine found — Ready";
+                    MachineStatus = "Machine connected — Ready";
                     MachineIndicator = Brushes.LimeGreen;
                     IsConnected = true;
                     IsExposing = false;
@@ -1016,6 +1025,16 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             }
         });
     }
+
+    private void OnDiscoveryStatus(object? sender, string message)
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            MachineStatus = message;
+            _log.Log($"Discovery: {message}", "info");
+        });
+    }
+
 
     private void OnHeartbeatTick(object? sender, EventArgs e)
     {
@@ -1353,6 +1372,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         _sirona.KvChanged -= OnKvChanged;
         _sirona.ScanlineReceived -= OnScanlineReceived;
         _sirona.ExposeStarted -= OnExposeStarted;
+        _sirona.DiscoveryStatus -= OnDiscoveryStatus;
         _log.Log("PureXS application shutting down");
         await _sirona.DisposeAsync();
         if (_pureChart is IDisposable disposable)

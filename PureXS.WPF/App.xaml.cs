@@ -31,12 +31,16 @@ public partial class App : Application
 
         try
         {
-            // Wire up dependencies
-            var host = Environment.GetEnvironmentVariable("SIRONA_IP") ?? "192.168.139.170";
-            var port = int.TryParse(Environment.GetEnvironmentVariable("SIRONA_PORT"), out var p) ? p : 12837;
-
             // Config service — loads persisted settings from %AppData%/PureXS/config.json
             IConfigService config = new ConfigService();
+
+            // Wire up dependencies — priority: env var > persisted config > hardcoded default
+            var host = Environment.GetEnvironmentVariable("SIRONA_IP")
+                ?? config.SironaHost
+                ?? "192.168.139.170";
+            var port = int.TryParse(Environment.GetEnvironmentVariable("SIRONA_PORT"), out var p)
+                ? p
+                : config.SironaPort ?? 12837;
 
             // Resolve facility token: env var > persisted config > first-launch prompt
             var facilityToken = Environment.GetEnvironmentVariable("PURECHART_FACILITY_TOKEN")
@@ -61,7 +65,7 @@ public partial class App : Application
                 }
             }
 
-            ISironaService sirona = new SironaService(host, port);
+            ISironaService sirona = new SironaService(host, port, config: config);
             IPureChartService pureChart = new PureChartService(facilityToken);
             IImageProcessingService imageProcessor = new ImageProcessingService();
             IPatientOutputService patientOutput = new PatientOutputService();
