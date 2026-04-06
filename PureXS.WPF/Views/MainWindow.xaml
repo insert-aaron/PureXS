@@ -6,6 +6,8 @@
         Width="1280" Height="800"
         MinWidth="1050" MinHeight="650"
         WindowStartupLocation="CenterScreen"
+        WindowStyle="None"
+        AllowsTransparency="False"
         Background="#1A1A2E">
 
     <Window.Resources>
@@ -327,6 +329,8 @@
                     <ColumnDefinition Width="Auto" />  <!-- History -->
                     <ColumnDefinition Width="*" />      <!-- spacer -->
                     <ColumnDefinition Width="Auto" />  <!-- API status -->
+                    <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="Auto" />  <!-- Window controls -->
                 </Grid.ColumnDefinitions>
 
                 <!-- PureXS logo text -->
@@ -381,6 +385,73 @@
                                VerticalAlignment="Center"
                                MaxWidth="200"
                                TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+
+                <!-- Window controls: Minimize, Maximize, Close -->
+                <StackPanel Grid.Column="10"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <!-- Minimize -->
+                    <Button x:Name="MinimizeBtn"
+                            Content="&#xE921;"
+                            FontFamily="Segoe MDL2 Assets"
+                            FontSize="10"
+                            Width="36" Height="30"
+                            Cursor="Hand">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="bd" Background="Transparent" Padding="0">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="bd" Property="Background" Value="#2A2A4A" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                    <!-- Maximize/Restore -->
+                    <Button x:Name="MaximizeBtn"
+                            Content="&#xE922;"
+                            FontFamily="Segoe MDL2 Assets"
+                            FontSize="10"
+                            Width="36" Height="30"
+                            Cursor="Hand">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="bd" Background="Transparent" Padding="0">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="bd" Property="Background" Value="#2A2A4A" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                    <!-- Close -->
+                    <Button x:Name="CloseBtn"
+                            Content="&#xE8BB;"
+                            FontFamily="Segoe MDL2 Assets"
+                            FontSize="10"
+                            Foreground="#E0E0E0"
+                            Width="36" Height="30"
+                            Cursor="Hand">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="bd" Background="Transparent" Padding="0">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="bd" Property="Background" Value="#C42B1C" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
                 </StackPanel>
             </Grid>
         </Border>

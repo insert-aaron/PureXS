@@ -26,6 +26,38 @@ public partial class MainWindow : Window
         ImageContainer.MouseLeftButtonDown += ImageContainer_MouseLeftButtonDown;
         ImageContainer.MouseMove += ImageContainer_MouseMove;
         ImageContainer.MouseLeftButtonUp += ImageContainer_MouseLeftButtonUp;
+
+        // Window chrome buttons
+        MinimizeBtn.Click += (_, _) => WindowState = WindowState.Minimized;
+        MaximizeBtn.Click += (_, _) =>
+        {
+            WindowState = WindowState == WindowState.Maximized
+                ? WindowState.Normal
+                : WindowState.Maximized;
+        };
+        CloseBtn.Click += (_, _) => Close();
+    }
+
+    // ── Custom title bar drag ───────────────────────────────────────────
+    protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
+    {
+        base.OnMouseLeftButtonDown(e);
+
+        // Only drag from the top toolbar area (first 50 pixels)
+        var pos = e.GetPosition(this);
+        if (pos.Y <= 50 && !_isDragging)
+        {
+            // Double-click on title bar = toggle maximize
+            if (e.ClickCount == 2)
+            {
+                WindowState = WindowState == WindowState.Maximized
+                    ? WindowState.Normal
+                    : WindowState.Maximized;
+                return;
+            }
+
+            DragMove();
+        }
     }
 
     private void ImageContainer_MouseWheel(object sender, MouseWheelEventArgs e)
