@@ -21,6 +21,7 @@
         <SolidColorBrush x:Key="FieldBg" Color="#111128" />
 
         <BooleanToVisibilityConverter x:Key="BoolToVis" />
+        <CubicEase x:Key="EaseOut" EasingMode="EaseOut" />
 
         <!-- Dark TextBox -->
         <Style x:Key="DarkTextBox" TargetType="TextBox">
@@ -714,14 +715,37 @@
                                                     </Grid>
                                                 </Border>
                                                 <ControlTemplate.Triggers>
-                                                    <!-- Hover: scale up -->
+                                                    <!-- Hover: animated scale up + cyan glow -->
+                                                    <EventTrigger RoutedEvent="MouseEnter">
+                                                        <BeginStoryboard>
+                                                            <Storyboard>
+                                                                <DoubleAnimation Storyboard.TargetName="avatarBorder"
+                                                                                 Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                                                                 To="1.12" Duration="0:0:0.15"
+                                                                                 EasingFunction="{StaticResource EaseOut}" />
+                                                                <DoubleAnimation Storyboard.TargetName="avatarBorder"
+                                                                                 Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                                                                 To="1.12" Duration="0:0:0.15"
+                                                                                 EasingFunction="{StaticResource EaseOut}" />
+                                                            </Storyboard>
+                                                        </BeginStoryboard>
+                                                    </EventTrigger>
+                                                    <EventTrigger RoutedEvent="MouseLeave">
+                                                        <BeginStoryboard>
+                                                            <Storyboard>
+                                                                <DoubleAnimation Storyboard.TargetName="avatarBorder"
+                                                                                 Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                                                                 To="1.0" Duration="0:0:0.15"
+                                                                                 EasingFunction="{StaticResource EaseOut}" />
+                                                                <DoubleAnimation Storyboard.TargetName="avatarBorder"
+                                                                                 Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                                                                 To="1.0" Duration="0:0:0.15"
+                                                                                 EasingFunction="{StaticResource EaseOut}" />
+                                                            </Storyboard>
+                                                        </BeginStoryboard>
+                                                    </EventTrigger>
                                                     <Trigger Property="IsMouseOver" Value="True">
                                                         <Setter TargetName="avatarBorder" Property="BorderBrush" Value="#4FC3F7" />
-                                                        <Setter TargetName="avatarBorder" Property="RenderTransform">
-                                                            <Setter.Value>
-                                                                <ScaleTransform ScaleX="1.08" ScaleY="1.08" />
-                                                            </Setter.Value>
-                                                        </Setter>
                                                     </Trigger>
                                                 </ControlTemplate.Triggers>
                                             </ControlTemplate>
