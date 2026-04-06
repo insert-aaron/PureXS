@@ -1026,16 +1026,11 @@
                     <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,0,0,14" />
 
                     <!-- ── Patient Section ────────────────────────────── -->
-                    <TextBlock Text="Patient"
-                               Foreground="#81D4FA"
-                               FontSize="12"
-                               FontWeight="SemiBold"
-                               Margin="0,0,0,10" />
 
-                    <!-- Patient form (visible when NOT set) -->
-                    <StackPanel>
-                        <StackPanel.Style>
-                            <Style TargetType="StackPanel">
+                    <!-- Tab switcher: PureChart | Manual -->
+                    <Grid Margin="0,0,0,8">
+                        <Grid.Style>
+                            <Style TargetType="Grid">
                                 <Setter Property="Visibility" Value="Visible" />
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding IsPatientSet}" Value="True">
@@ -1043,100 +1038,228 @@
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
+                        </Grid.Style>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="4" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <!-- PureChart tab -->
+                        <Button Grid.Column="0" Cursor="Hand"
+                                Command="{Binding ToggleManualEntryCommand}"
+                                CommandParameter="purechart">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="tabBorder" CornerRadius="6" Padding="6,5">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="#0F3460" />
+                                                <Setter Property="BorderBrush" Value="#4FC3F7" />
+                                                <Setter Property="BorderThickness" Value="0,0,0,2" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsManualEntryMode}" Value="True">
+                                                        <Setter Property="Background" Value="#111128" />
+                                                        <Setter Property="BorderBrush" Value="Transparent" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <TextBlock Text="PureChart" FontSize="11" FontWeight="SemiBold"
+                                                   HorizontalAlignment="Center" Foreground="#4FC3F7" />
+                                    </Border>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                        <!-- Manual tab -->
+                        <Button Grid.Column="2" Cursor="Hand"
+                                Command="{Binding ToggleManualEntryCommand}"
+                                CommandParameter="manual">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="tabBorder" CornerRadius="6" Padding="6,5">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="#111128" />
+                                                <Setter Property="BorderBrush" Value="Transparent" />
+                                                <Setter Property="BorderThickness" Value="0,0,0,2" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsManualEntryMode}" Value="True">
+                                                        <Setter Property="Background" Value="#0F3460" />
+                                                        <Setter Property="BorderBrush" Value="#81D4FA" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <TextBlock Text="Manual" FontSize="11" FontWeight="SemiBold"
+                                                   HorizontalAlignment="Center" Foreground="#81D4FA" />
+                                    </Border>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                    </Grid>
+
+                    <!-- ══ Tab 1: PureChart patient list (default) ══ -->
+                    <Border MaxHeight="220" Margin="0,0,0,6">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsManualEntryMode}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsPatientSet}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
+                            <ItemsControl ItemsSource="{Binding PureChartResults}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type models:PureChartPatient}">
+                                        <Button Command="{Binding DataContext.SelectPatientCommand,
+                                                    RelativeSource={RelativeSource AncestorType=Window}}"
+                                                CommandParameter="{Binding}"
+                                                Cursor="Hand"
+                                                Margin="0,0,0,2">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border x:Name="ptRow"
+                                                            Background="#111128"
+                                                            CornerRadius="6"
+                                                            Padding="8,6"
+                                                            BorderBrush="#2A2A4A"
+                                                            BorderThickness="1">
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="36" />
+                                                                <ColumnDefinition Width="8" />
+                                                                <ColumnDefinition Width="*" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <!-- Small avatar -->
+                                                            <Border Grid.Column="0" Width="32" Height="32"
+                                                                    CornerRadius="16" Background="#0F3460"
+                                                                    ClipToBounds="True">
+                                                                <Grid>
+                                                                    <Image Source="{Binding ProfileImage}"
+                                                                           Stretch="UniformToFill" />
+                                                                    <Border Background="#0F3460">
+                                                                        <Border.Style>
+                                                                            <Style TargetType="Border">
+                                                                                <Setter Property="Visibility" Value="Visible" />
+                                                                                <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding HasProfileImage}" Value="True">
+                                                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                                                    </DataTrigger>
+                                                                                </Style.Triggers>
+                                                                            </Style>
+                                                                        </Border.Style>
+                                                                        <TextBlock Text="{Binding Initials}"
+                                                                                   Foreground="White" FontSize="11"
+                                                                                   FontWeight="Bold"
+                                                                                   HorizontalAlignment="Center"
+                                                                                   VerticalAlignment="Center" />
+                                                                    </Border>
+                                                                </Grid>
+                                                            </Border>
+                                                            <!-- Name + DOB -->
+                                                            <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                                                <TextBlock Foreground="White" FontSize="12"
+                                                                           TextTrimming="CharacterEllipsis">
+                                                                    <Run Text="{Binding FirstName, Mode=OneWay}" />
+                                                                    <Run Text=" " />
+                                                                    <Run Text="{Binding LastName, Mode=OneWay}" />
+                                                                </TextBlock>
+                                                                <TextBlock Text="{Binding Dob}" FontSize="9"
+                                                                           Foreground="#8892A0" />
+                                                            </StackPanel>
+                                                        </Grid>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="ptRow" Property="Background" Value="#1A2A44" />
+                                                            <Setter TargetName="ptRow" Property="BorderBrush" Value="#4FC3F7" />
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Border>
+
+                    <!-- ══ Tab 2: Manual entry form ══ -->
+                    <StackPanel>
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <MultiDataTrigger>
+                                        <MultiDataTrigger.Conditions>
+                                            <Condition Binding="{Binding IsManualEntryMode}" Value="True" />
+                                            <Condition Binding="{Binding IsPatientSet}" Value="False" />
+                                        </MultiDataTrigger.Conditions>
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </MultiDataTrigger>
+                                </Style.Triggers>
+                            </Style>
                         </StackPanel.Style>
 
-                        <!-- First name -->
                         <Grid Margin="0,0,0,6">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="42" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="First:"
-                                       Foreground="{StaticResource TextSecondary}"
-                                       FontSize="11" VerticalAlignment="Center" />
-                            <TextBox Grid.Column="1"
-                                     Text="{Binding PtFirstName, UpdateSourceTrigger=PropertyChanged}"
-                                     Style="{StaticResource DarkTextBox}"
-                                     Tag="First name" />
+                            <TextBlock Grid.Column="0" Text="First:" Foreground="{StaticResource TextSecondary}" FontSize="11" VerticalAlignment="Center" />
+                            <TextBox Grid.Column="1" Text="{Binding PtFirstName, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource DarkTextBox}" Tag="First name" />
                         </Grid>
-
-                        <!-- Last name -->
                         <Grid Margin="0,0,0,6">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="42" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Last:"
-                                       Foreground="{StaticResource TextSecondary}"
-                                       FontSize="11" VerticalAlignment="Center" />
-                            <TextBox Grid.Column="1"
-                                     Text="{Binding PtLastName, UpdateSourceTrigger=PropertyChanged}"
-                                     Style="{StaticResource DarkTextBox}"
-                                     Tag="Last name" />
+                            <TextBlock Grid.Column="0" Text="Last:" Foreground="{StaticResource TextSecondary}" FontSize="11" VerticalAlignment="Center" />
+                            <TextBox Grid.Column="1" Text="{Binding PtLastName, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource DarkTextBox}" Tag="Last name" />
                         </Grid>
-
-                        <!-- DOB -->
                         <Grid Margin="0,0,0,6">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="42" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="DOB:"
-                                       Foreground="{StaticResource TextSecondary}"
-                                       FontSize="11" VerticalAlignment="Center" />
-                            <TextBox Grid.Column="1"
-                                     Text="{Binding PtDob, UpdateSourceTrigger=PropertyChanged}"
-                                     Style="{StaticResource DarkTextBox}"
-                                     Tag="MM/DD/YYYY" />
+                            <TextBlock Grid.Column="0" Text="DOB:" Foreground="{StaticResource TextSecondary}" FontSize="11" VerticalAlignment="Center" />
+                            <TextBox Grid.Column="1" Text="{Binding PtDob, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource DarkTextBox}" Tag="MM/DD/YYYY" />
                         </Grid>
-
-                        <!-- ID -->
                         <Grid Margin="0,0,0,10">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="42" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="ID:"
-                                       Foreground="{StaticResource TextSecondary}"
-                                       FontSize="11" VerticalAlignment="Center" />
-                            <TextBox Grid.Column="1"
-                                     Text="{Binding PtId, UpdateSourceTrigger=PropertyChanged}"
-                                     Style="{StaticResource DarkTextBox}"
-                                     Tag="(auto if blank)" />
+                            <TextBlock Grid.Column="0" Text="ID:" Foreground="{StaticResource TextSecondary}" FontSize="11" VerticalAlignment="Center" />
+                            <TextBox Grid.Column="1" Text="{Binding PtId, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource DarkTextBox}" Tag="(auto if blank)" />
                         </Grid>
-
-                        <!-- Set + Clear buttons -->
                         <Grid Margin="0,0,0,6">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="8" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <Button Grid.Column="0"
-                                    Command="{Binding SetPatientCommand}"
-                                    Style="{StaticResource GreenButtonStyle}"
-                                    Padding="10,7">
+                            <Button Grid.Column="0" Command="{Binding SetPatientCommand}" Style="{StaticResource GreenButtonStyle}" Padding="10,7">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="&#x2713; " />
                                     <TextBlock Text="Set Patient" />
                                 </StackPanel>
                             </Button>
-                            <Button Grid.Column="2"
-                                    Command="{Binding ClearPatientCommand}"
-                                    Style="{StaticResource ToolbarButtonStyle}"
-                                    Padding="10,7">
+                            <Button Grid.Column="2" Command="{Binding ClearPatientCommand}" Style="{StaticResource ToolbarButtonStyle}" Padding="10,7">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="&#x2717; " />
                                     <TextBlock Text="Clear" />
                                 </StackPanel>
                             </Button>
                         </Grid>
-
-                        <!-- Patient form status -->
-                        <TextBlock Text="{Binding PatientFormStatus}"
-                                   Foreground="{Binding PatientFormStatusColor}"
-                                   FontSize="11"
-                                   Margin="0,0,0,4" />
+                        <TextBlock Text="{Binding PatientFormStatus}" Foreground="{Binding PatientFormStatusColor}" FontSize="11" Margin="0,0,0,4" />
                     </StackPanel>
 
                     <!-- Selected Patient Card (visible when IS set) -->

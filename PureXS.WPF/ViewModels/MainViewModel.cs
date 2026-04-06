@@ -208,6 +208,15 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
     [ObservableProperty]
     private bool _isSearchExpanded;
 
+    [ObservableProperty]
+    private bool _isManualEntryMode;
+
+    [RelayCommand]
+    private void ToggleManualEntry(string? mode)
+    {
+        IsManualEntryMode = mode == "manual";
+    }
+
     [RelayCommand]
     private void ToggleSearch()
     {
