@@ -54,9 +54,6 @@ public static class ExamTypes
         "Panoramic",
         "Ceph Lateral",
         "Ceph Frontal",
-        "Bitewing Left",
-        "Bitewing Right",
-        "Bitewing Bilateral",
         "Periapical"
     ];
 
@@ -65,7 +62,6 @@ public static class ExamTypes
     {
         "Panoramic" => "panoramic_xray",
         "Ceph Lateral" or "Ceph Frontal" => "xrays",
-        "Bitewing Left" or "Bitewing Right" or "Bitewing Bilateral" => "bitewings",
         "Periapical" => "periapical",
         _ => "xrays"
     };
