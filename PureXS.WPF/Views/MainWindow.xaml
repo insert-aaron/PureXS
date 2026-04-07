@@ -644,7 +644,7 @@
                         </Style>
                     </ColumnDefinition.Style>
                 </ColumnDefinition>
-                <ColumnDefinition Width="280" />  <!-- Left Panel -->
+                <ColumnDefinition Width="340" />  <!-- Left Panel -->
                 <ColumnDefinition Width="*" />    <!-- Image Viewer -->
             </Grid.ColumnDefinitions>
 
