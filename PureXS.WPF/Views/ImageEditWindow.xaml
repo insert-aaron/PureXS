@@ -5,13 +5,13 @@
         Width="1200" Height="800"
         MinWidth="900" MinHeight="600"
         WindowStartupLocation="CenterOwner"
-        Background="#0D1117"
+        Background="{DynamicResource ToolbarBg}"
         ShowInTaskbar="False"
         ResizeMode="CanResize">
 
     <Window.Resources>
         <SolidColorBrush x:Key="SliderTrackBg" Color="#2A2A4A" />
-        <SolidColorBrush x:Key="SliderThumb" Color="#4FC3F7" />
+        <SolidColorBrush x:Key="SliderThumb" Color="#3B82F6" />
 
         <Style x:Key="EditSlider" TargetType="Slider">
             <Setter Property="Minimum" Value="-100" />
@@ -28,77 +28,77 @@
             <ColumnDefinition Width="280" />
         </Grid.ColumnDefinitions>
 
-        <!-- ═══ Left: Image Preview ═══ -->
-        <Border Grid.Column="0" Background="#0A0A0A" CornerRadius="8"
+        <!-- Left: Image Preview -->
+        <Border Grid.Column="0" Background="{DynamicResource ImageViewerBg}" CornerRadius="8"
                 Margin="8" ClipToBounds="True">
             <Image x:Name="PreviewImage"
                    Stretch="Uniform"
                    RenderOptions.BitmapScalingMode="HighQuality" />
         </Border>
 
-        <!-- ═══ Right: Edit Sidebar ═══ -->
-        <Border Grid.Column="1" Background="#111827" CornerRadius="8" Margin="0,8,8,8">
+        <!-- Right: Edit Sidebar -->
+        <Border Grid.Column="1" Background="{DynamicResource PanelBg}" CornerRadius="8" Margin="0,8,8,8">
             <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0">
                 <StackPanel Margin="16">
 
                     <TextBlock Text="Edit Image"
-                               Foreground="White"
+                               Foreground="{DynamicResource TextPrimary}"
                                FontSize="18"
                                FontWeight="Bold"
                                Margin="0,0,0,16" />
 
                     <!-- Exposure -->
-                    <TextBlock Text="Exposure" Foreground="#90A4AE" FontSize="11" Margin="0,0,0,4" />
+                    <TextBlock Text="Exposure" Foreground="{DynamicResource TextSecondary}" FontSize="11" Margin="0,0,0,4" />
                     <Slider x:Name="ExposureSlider"
                             Style="{StaticResource EditSlider}"
                             Value="0"
                             ValueChanged="OnSliderChanged" />
                     <TextBlock x:Name="ExposureLabel"
-                               Text="0" Foreground="#546E7A" FontSize="10"
+                               Text="0" Foreground="{DynamicResource TextMuted}" FontSize="10"
                                HorizontalAlignment="Right" Margin="0,0,0,12" />
 
                     <!-- Contrast -->
-                    <TextBlock Text="Contrast" Foreground="#90A4AE" FontSize="11" Margin="0,0,0,4" />
+                    <TextBlock Text="Contrast" Foreground="{DynamicResource TextSecondary}" FontSize="11" Margin="0,0,0,4" />
                     <Slider x:Name="ContrastSlider"
                             Minimum="30" Maximum="300" Value="100"
                             TickFrequency="1" IsSnapToTickEnabled="True"
                             Height="22"
                             ValueChanged="OnSliderChanged" />
                     <TextBlock x:Name="ContrastLabel"
-                               Text="1.00" Foreground="#546E7A" FontSize="10"
+                               Text="1.00" Foreground="{DynamicResource TextMuted}" FontSize="10"
                                HorizontalAlignment="Right" Margin="0,0,0,12" />
 
                     <!-- Brightness -->
-                    <TextBlock Text="Brightness" Foreground="#90A4AE" FontSize="11" Margin="0,0,0,4" />
+                    <TextBlock Text="Brightness" Foreground="{DynamicResource TextSecondary}" FontSize="11" Margin="0,0,0,4" />
                     <Slider x:Name="BrightnessSlider"
                             Style="{StaticResource EditSlider}"
                             Value="0"
                             ValueChanged="OnSliderChanged" />
                     <TextBlock x:Name="BrightnessLabel"
-                               Text="0" Foreground="#546E7A" FontSize="10"
+                               Text="0" Foreground="{DynamicResource TextMuted}" FontSize="10"
                                HorizontalAlignment="Right" Margin="0,0,0,12" />
 
                     <!-- Sharpness -->
-                    <TextBlock Text="Sharpness" Foreground="#90A4AE" FontSize="11" Margin="0,0,0,4" />
+                    <TextBlock Text="Sharpness" Foreground="{DynamicResource TextSecondary}" FontSize="11" Margin="0,0,0,4" />
                     <Slider x:Name="SharpnessSlider"
                             Minimum="0" Maximum="300" Value="0"
                             TickFrequency="1" IsSnapToTickEnabled="True"
                             Height="22"
                             ValueChanged="OnSliderChanged" />
                     <TextBlock x:Name="SharpnessLabel"
-                               Text="0.0" Foreground="#546E7A" FontSize="10"
+                               Text="0.0" Foreground="{DynamicResource TextMuted}" FontSize="10"
                                HorizontalAlignment="Right" Margin="0,0,0,12" />
 
                     <!-- Invert -->
                     <CheckBox x:Name="InvertCheck"
                               Content="Invert"
-                              Foreground="#90A4AE"
+                              Foreground="{DynamicResource TextSecondary}"
                               FontSize="11"
                               Margin="0,4,0,20"
                               Checked="OnSliderChanged"
                               Unchecked="OnSliderChanged" />
 
-                    <!-- ═══ Action Buttons ═══ -->
+                    <!-- Action Buttons -->
                     <Button Content="Reset All"
                             Click="OnReset"
                             Padding="12,10"
@@ -108,13 +108,13 @@
                             Margin="0,0,0,8">
                         <Button.Template>
                             <ControlTemplate TargetType="Button">
-                                <Border x:Name="border" Background="#37474F" CornerRadius="6"
+                                <Border x:Name="border" Background="{DynamicResource ToolbarBtnBg}" CornerRadius="6"
                                         Padding="{TemplateBinding Padding}">
                                     <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                                 </Border>
                                 <ControlTemplate.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="border" Property="Background" Value="#455A64" />
+                                        <Setter TargetName="border" Property="Background" Value="{DynamicResource ToolbarBtnHover}" />
                                     </Trigger>
                                 </ControlTemplate.Triggers>
                             </ControlTemplate>
@@ -131,13 +131,13 @@
                             Margin="0,0,0,8">
                         <Button.Template>
                             <ControlTemplate TargetType="Button">
-                                <Border x:Name="border" Background="#1565C0" CornerRadius="6"
+                                <Border x:Name="border" Background="{DynamicResource BlueBtnBg}" CornerRadius="6"
                                         Padding="{TemplateBinding Padding}">
                                     <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                                 </Border>
                                 <ControlTemplate.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="border" Property="Background" Value="#1976D2" />
+                                        <Setter TargetName="border" Property="Background" Value="{DynamicResource BlueBtnHover}" />
                                     </Trigger>
                                 </ControlTemplate.Triggers>
                             </ControlTemplate>
@@ -153,13 +153,13 @@
                             Margin="0,0,0,8">
                         <Button.Template>
                             <ControlTemplate TargetType="Button">
-                                <Border x:Name="border" Background="#1B5E20" CornerRadius="6"
+                                <Border x:Name="border" Background="{DynamicResource GreenBtnBg}" CornerRadius="6"
                                         Padding="{TemplateBinding Padding}">
                                     <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                                 </Border>
                                 <ControlTemplate.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="border" Property="Background" Value="#2E7D32" />
+                                        <Setter TargetName="border" Property="Background" Value="{DynamicResource GreenBtnHover}" />
                                     </Trigger>
                                 </ControlTemplate.Triggers>
                             </ControlTemplate>
@@ -174,13 +174,13 @@
                             Cursor="Hand">
                         <Button.Template>
                             <ControlTemplate TargetType="Button">
-                                <Border x:Name="border" Background="#424242" CornerRadius="6"
+                                <Border x:Name="border" Background="{DynamicResource DisabledBg}" CornerRadius="6"
                                         Padding="{TemplateBinding Padding}">
                                     <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                                 </Border>
                                 <ControlTemplate.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="border" Property="Background" Value="#616161" />
+                                        <Setter TargetName="border" Property="Background" Value="{DynamicResource ToolbarBtnHover}" />
                                     </Trigger>
                                 </ControlTemplate.Triggers>
                             </ControlTemplate>

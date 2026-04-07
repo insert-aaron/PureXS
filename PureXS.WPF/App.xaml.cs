@@ -1,5 +1,7 @@
 using System.IO;
 using System.Windows;
+using System.Windows.Media;
+using iNKORE.UI.WPF.Modern;
 using PureXS.Services;
 using PureXS.ViewModels;
 using PureXS.Views;
@@ -8,9 +10,17 @@ namespace PureXS;
 
 public partial class App : Application
 {
+    public static bool IsDarkMode { get; private set; } = true;
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // Set iNKORE theme to Dark by default
+        ThemeManager.Current.ApplicationTheme = ApplicationTheme.Dark;
+
+        // Apply dark mode brushes
+        ApplyTheme(isDark: true);
 
         // Catch all unhandled exceptions and show them
         AppDomain.CurrentDomain.UnhandledException += (s, args) =>
@@ -85,5 +95,84 @@ public partial class App : Application
             MessageBox.Show(msg, "PureXS Startup Error", MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(1);
         }
+    }
+
+    /// <summary>
+    /// Switches all theme-dependent brushes between Dark and Light mode.
+    /// Call from any window via App.ToggleTheme() or App.ApplyTheme(isDark).
+    /// </summary>
+    public static void ToggleTheme()
+    {
+        ApplyTheme(!IsDarkMode);
+    }
+
+    public static void ApplyTheme(bool isDark)
+    {
+        IsDarkMode = isDark;
+        var res = Current.Resources;
+
+        // Sync iNKORE theme
+        ThemeManager.Current.ApplicationTheme = isDark
+            ? ApplicationTheme.Dark
+            : ApplicationTheme.Light;
+
+        // ── Core Surfaces ─────────────────────────────────────────────
+        SetBrush(res, "WindowBg",        isDark ? "#0F172A" : "#F8FAFC");
+        SetBrush(res, "PanelBg",         isDark ? "#111827" : "#F1F5F9");
+        SetBrush(res, "CardBg",          isDark ? "#1E293B" : "#FFFFFF");
+        SetBrush(res, "FieldBg",         isDark ? "#0F172A" : "#FFFFFF");
+        SetBrush(res, "ToolbarBg",       isDark ? "#0F172A" : "#FFFFFF");
+        SetBrush(res, "BottomToolbarBg", isDark ? "#111827" : "#F8FAFC");
+        SetBrush(res, "StatusBarBg",     isDark ? "#020617" : "#F8FAFC");
+        SetBrush(res, "ImageViewerBg",   isDark ? "#030712" : "#F1F5F9");
+
+        // ── Top Bar Gradient ──────────────────────────────────────────
+        SetColor(res, "TopBarStart", isDark ? "#0F172A" : "#1D4ED8");
+        SetColor(res, "TopBarMid",   isDark ? "#1E3A5F" : "#2563EB");
+        SetColor(res, "TopBarEnd",   isDark ? "#1D4ED8" : "#3B82F6");
+
+        // ── Text ──────────────────────────────────────────────────────
+        SetBrush(res, "TextPrimary",   isDark ? "#E2E8F0" : "#0F172A");
+        SetBrush(res, "TextSecondary", isDark ? "#94A3B8" : "#64748B");
+        SetBrush(res, "TextMuted",     isDark ? "#475569" : "#94A3B8");
+
+        // ── Borders ───────────────────────────────────────────────────
+        SetBrush(res, "BorderPrimary", isDark ? "#1E293B" : "#E2E8F0");
+        SetBrush(res, "BorderSubtle",  isDark ? "#334155" : "#CBD5E1");
+
+        // ── Interactive States ────────────────────────────────────────
+        SetBrush(res, "HoverBg",       isDark ? "#1E3A5F" : "#DBEAFE");
+        SetBrush(res, "SelectedBg",    isDark ? "#1E40AF" : "#BFDBFE");
+        SetBrush(res, "DisabledBg",    isDark ? "#1E293B" : "#F1F5F9");
+        SetBrush(res, "DisabledText",  isDark ? "#475569" : "#94A3B8");
+        SetBrush(res, "DisabledBorder",isDark ? "#334155" : "#CBD5E1");
+
+        // ── Toolbar Buttons ───────────────────────────────────────────
+        SetBrush(res, "ToolbarBtnBg",    isDark ? "#1E293B" : "#F1F5F9");
+        SetBrush(res, "ToolbarBtnHover", isDark ? "#334155" : "#E2E8F0");
+        SetBrush(res, "ToolbarBtnBorder",isDark ? "#334155" : "#CBD5E1");
+
+        // ── Patient / UI Specialty ────────────────────────────────────
+        SetBrush(res, "InitialsBg",      isDark ? "#1E40AF" : "#DBEAFE");
+        SetBrush(res, "TabActiveBg",     isDark ? "#1E40AF" : "#DBEAFE");
+        SetBrush(res, "TabActiveBorder", isDark ? "#3B82F6" : "#2563EB");
+        SetBrush(res, "TabInactiveBg",   isDark ? "#0F172A" : "#F1F5F9");
+        SetBrush(res, "PatientBannerFg", isDark ? "#3B82F6" : "#1D4ED8");
+        SetBrush(res, "ExamBadgeBg",     isDark ? "#1E40AF" : "#DBEAFE");
+        SetBrush(res, "ExamBadgeFg",     isDark ? "#3B82F6" : "#1D4ED8");
+        SetBrush(res, "AvatarBorder",    isDark ? "#334155" : "#CBD5E1");
+        SetBrush(res, "WinControlHover", isDark ? "#1E293B" : "#E2E8F0");
+    }
+
+    private static void SetBrush(ResourceDictionary res, string key, string hex)
+    {
+        var color = (Color)ColorConverter.ConvertFromString(hex);
+        // Replace the resource — DynamicResource bindings auto-update
+        res[key] = new SolidColorBrush(color);
+    }
+
+    private static void SetColor(ResourceDictionary res, string key, string hex)
+    {
+        res[key] = (Color)ColorConverter.ConvertFromString(hex);
     }
 }

@@ -1,11 +1,149 @@
 <Application x:Class="PureXS.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.inkore.net/lib/ui/wpf/modern"
              ShutdownMode="OnMainWindowClose">
     <Application.Resources>
-        <!-- Global font -->
-        <Style TargetType="Window">
-            <Setter Property="FontFamily" Value="Segoe UI" />
-        </Style>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ui:ThemeResources />
+                <ui:XamlControlsResources />
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- ════════════════════════════════════════════════════════════ -->
+            <!-- PureXS Theme System                                        -->
+            <!-- All brushes use DynamicResource for runtime theme switching -->
+            <!-- Default values = Dark Mode                                 -->
+            <!-- ════════════════════════════════════════════════════════════ -->
+
+            <!-- ── Brand Colors (Fixed across themes) ──────────────────── -->
+            <Color x:Key="DentalBlueColor">#2563EB</Color>
+            <Color x:Key="DentalGreenColor">#10B981</Color>
+            <Color x:Key="DentalAccentColor">#3B82F6</Color>
+
+            <SolidColorBrush x:Key="DentalBlue" Color="#2563EB" />
+            <SolidColorBrush x:Key="DentalGreen" Color="#10B981" />
+            <SolidColorBrush x:Key="DentalAccent" Color="#3B82F6" />
+
+            <!-- ── Accent Scale (Fixed) ────────────────────────────────── -->
+            <SolidColorBrush x:Key="Accent900" Color="#1E3A8A" />
+            <SolidColorBrush x:Key="Accent800" Color="#1E40AF" />
+            <SolidColorBrush x:Key="Accent700" Color="#1D4ED8" />
+            <SolidColorBrush x:Key="Accent600" Color="#2563EB" />
+            <SolidColorBrush x:Key="Accent500" Color="#3B82F6" />
+            <SolidColorBrush x:Key="Accent400" Color="#60A5FA" />
+            <SolidColorBrush x:Key="Accent300" Color="#93C5FD" />
+
+            <!-- ── Core Surface Colors (Theme-switchable) ──────────────── -->
+            <SolidColorBrush x:Key="WindowBg"        Color="#0F172A" />
+            <SolidColorBrush x:Key="PanelBg"         Color="#111827" />
+            <SolidColorBrush x:Key="CardBg"          Color="#1E293B" />
+            <SolidColorBrush x:Key="FieldBg"         Color="#0F172A" />
+            <SolidColorBrush x:Key="ToolbarBg"       Color="#0F172A" />
+            <SolidColorBrush x:Key="BottomToolbarBg" Color="#111827" />
+            <SolidColorBrush x:Key="StatusBarBg"     Color="#020617" />
+            <SolidColorBrush x:Key="ImageViewerBg"   Color="#030712" />
+
+            <!-- ── Top Bar Gradient Colors (Theme-switchable) ──────────── -->
+            <Color x:Key="TopBarStart">#0F172A</Color>
+            <Color x:Key="TopBarMid">#1E3A5F</Color>
+            <Color x:Key="TopBarEnd">#1D4ED8</Color>
+
+            <!-- ── Text Colors (Theme-switchable) ──────────────────────── -->
+            <SolidColorBrush x:Key="TextPrimary"   Color="#E2E8F0" />
+            <SolidColorBrush x:Key="TextSecondary"  Color="#94A3B8" />
+            <SolidColorBrush x:Key="TextMuted"      Color="#475569" />
+            <SolidColorBrush x:Key="TextOnAccent"   Color="#FFFFFF" />
+
+            <!-- ── Border Colors (Theme-switchable) ────────────────────── -->
+            <SolidColorBrush x:Key="BorderPrimary" Color="#1E293B" />
+            <SolidColorBrush x:Key="BorderSubtle"  Color="#334155" />
+
+            <!-- ── Interactive States (Theme-switchable) ───────────────── -->
+            <SolidColorBrush x:Key="HoverBg"       Color="#1E3A5F" />
+            <SolidColorBrush x:Key="SelectedBg"     Color="#1E40AF" />
+            <SolidColorBrush x:Key="DisabledBg"     Color="#1E293B" />
+            <SolidColorBrush x:Key="DisabledText"   Color="#475569" />
+            <SolidColorBrush x:Key="DisabledBorder" Color="#334155" />
+
+            <!-- ── Toolbar Button Colors (Theme-switchable) ────────────── -->
+            <SolidColorBrush x:Key="ToolbarBtnBg"     Color="#1E293B" />
+            <SolidColorBrush x:Key="ToolbarBtnHover"   Color="#334155" />
+            <SolidColorBrush x:Key="ToolbarBtnBorder"  Color="#334155" />
+
+            <!-- ── Accent Button (Connect, etc.) ───────────────────────── -->
+            <SolidColorBrush x:Key="AccentBtnBg"      Color="#1E40AF" />
+            <SolidColorBrush x:Key="AccentBtnHover"    Color="#1D4ED8" />
+            <SolidColorBrush x:Key="AccentBtnBorder"   Color="#2563EB" />
+
+            <!-- ── Green Button (Set Patient, Confirm) ─────────────────── -->
+            <SolidColorBrush x:Key="GreenBtnBg"     Color="#065F46" />
+            <SolidColorBrush x:Key="GreenBtnHover"   Color="#047857" />
+            <SolidColorBrush x:Key="GreenBtnBorder"  Color="#10B981" />
+
+            <!-- ── Blue Button (Save PNG) ──────────────────────────────── -->
+            <SolidColorBrush x:Key="BlueBtnBg"      Color="#1D4ED8" />
+            <SolidColorBrush x:Key="BlueBtnHover"    Color="#2563EB" />
+            <SolidColorBrush x:Key="BlueBtnBorder"   Color="#3B82F6" />
+
+            <!-- ── Purple Button (Connect, View DICOM) ─────────────────── -->
+            <SolidColorBrush x:Key="PurpleBtnBg"     Color="#4A148C" />
+            <SolidColorBrush x:Key="PurpleBtnHover"   Color="#6A1B9A" />
+            <SolidColorBrush x:Key="PurpleBtnBorder"  Color="#7C3AED" />
+
+            <!-- ── Orange Button (Retry Upload) ────────────────────────── -->
+            <SolidColorBrush x:Key="OrangeBtnBg"     Color="#EA580C" />
+            <SolidColorBrush x:Key="OrangeBtnHover"   Color="#F97316" />
+            <SolidColorBrush x:Key="OrangeBtnBorder"  Color="#FB923C" />
+
+            <!-- ── Danger / Expose (Fixed) ─────────────────────────────── -->
+            <SolidColorBrush x:Key="DangerBg"       Color="#DC2626" />
+            <SolidColorBrush x:Key="DangerHover"     Color="#EF4444" />
+            <SolidColorBrush x:Key="DangerBorder"    Color="#F87171" />
+            <SolidColorBrush x:Key="DangerPressed"   Color="#B91C1C" />
+
+            <!-- ── Slot Border States (Fixed) ──────────────────────────── -->
+            <SolidColorBrush x:Key="SlotPending"   Color="#374151" />
+            <SolidColorBrush x:Key="SlotCaptured"  Color="#10B981" />
+            <SolidColorBrush x:Key="SlotActive"    Color="#3B82F6" />
+            <SolidColorBrush x:Key="SlotDanger"    Color="#E81123" />
+
+            <!-- ── AI Detection Overlay (Fixed) ────────────────────────── -->
+            <SolidColorBrush x:Key="AiCaries"      Color="#EF4444" />
+            <SolidColorBrush x:Key="AiDeepCaries"   Color="#F97316" />
+            <SolidColorBrush x:Key="AiImpacted"     Color="#EAB308" />
+            <SolidColorBrush x:Key="AiPeriapical"   Color="#A855F7" />
+
+            <!-- ── Toast Notification Colors (Fixed) ───────────────────── -->
+            <SolidColorBrush x:Key="ToastInfo"     Color="#3B82F6" />
+            <SolidColorBrush x:Key="ToastSuccess"  Color="#10B981" />
+            <SolidColorBrush x:Key="ToastWarning"  Color="#F59E0B" />
+            <SolidColorBrush x:Key="ToastError"    Color="#EF4444" />
+
+            <!-- ── Patient / UI Specialty (Theme-switchable) ───────────── -->
+            <SolidColorBrush x:Key="InitialsBg"       Color="#1E40AF" />
+            <SolidColorBrush x:Key="TabActiveBg"      Color="#1E40AF" />
+            <SolidColorBrush x:Key="TabActiveBorder"   Color="#3B82F6" />
+            <SolidColorBrush x:Key="TabInactiveBg"    Color="#0F172A" />
+            <SolidColorBrush x:Key="PatientBannerFg"  Color="#3B82F6" />
+            <SolidColorBrush x:Key="ExamBadgeBg"      Color="#1E40AF" />
+            <SolidColorBrush x:Key="ExamBadgeFg"      Color="#3B82F6" />
+            <SolidColorBrush x:Key="AvatarBorder"     Color="#334155" />
+            <SolidColorBrush x:Key="SelectionRing"    Color="#3B82F6" />
+            <SolidColorBrush x:Key="SearchIconFg"     Color="#3B82F6" />
+            <SolidColorBrush x:Key="HeartbeatGreen"   Color="#10B981" />
+            <SolidColorBrush x:Key="ScanProgressFg"   Color="#F59E0B" />
+            <SolidColorBrush x:Key="CloseButtonHover" Color="#C42B1C" />
+            <SolidColorBrush x:Key="WinControlHover"  Color="#1E293B" />
+
+            <!-- ── Acrylic Fallback (Win10) ────────────────────────────── -->
+            <Color x:Key="AcrylicElementColor">#EB1E1E1E</Color>
+            <Color x:Key="AcrylicWindowColor">#E0181818</Color>
+
+            <!-- ── Global Font ─────────────────────────────────────────── -->
+            <Style TargetType="Window">
+                <Setter Property="FontFamily" Value="Segoe UI" />
+            </Style>
+        </ResourceDictionary>
     </Application.Resources>
 </Application>

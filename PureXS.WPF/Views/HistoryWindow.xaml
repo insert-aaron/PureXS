@@ -5,26 +5,19 @@
         Width="800" Height="600"
         MinWidth="640" MinHeight="400"
         WindowStartupLocation="CenterScreen"
-        Background="#1A1A2E">
+        Background="{DynamicResource WindowBg}">
 
     <Window.Resources>
-        <SolidColorBrush x:Key="PanelBg" Color="#16213E" />
-        <SolidColorBrush x:Key="TextPrimary" Color="#E0E0E0" />
-        <SolidColorBrush x:Key="TextSecondary" Color="#8892A0" />
-        <SolidColorBrush x:Key="BorderBrush" Color="#2A2A4A" />
-        <SolidColorBrush x:Key="FieldBg" Color="#111128" />
-        <SolidColorBrush x:Key="AccentBrush" Color="#0F3460" />
-
         <!-- Dark scrollbar style -->
         <Style TargetType="ScrollBar">
-            <Setter Property="Background" Value="#111128" />
+            <Setter Property="Background" Value="{DynamicResource FieldBg}" />
             <Setter Property="Width" Value="8" />
             <Setter Property="MinWidth" Value="8" />
         </Style>
 
         <!-- List item hover style for patients -->
         <Style x:Key="PatientListItemStyle" TargetType="ListBoxItem">
-            <Setter Property="Foreground" Value="#E0E0E0" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
             <Setter Property="Padding" Value="12,10" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Template">
@@ -33,17 +26,17 @@
                         <Border x:Name="border"
                                 Background="Transparent"
                                 Padding="{TemplateBinding Padding}"
-                                BorderBrush="#2A2A4A"
+                                BorderBrush="{DynamicResource BorderPrimary}"
                                 BorderThickness="0,0,0,1">
                             <ContentPresenter />
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#1E2A44" />
+                                <Setter TargetName="border" Property="Background" Value="{DynamicResource HoverBg}" />
                             </Trigger>
                             <Trigger Property="IsSelected" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#0F3460" />
-                                <Setter TargetName="border" Property="BorderBrush" Value="#4FC3F7" />
+                                <Setter TargetName="border" Property="Background" Value="{DynamicResource SelectedBg}" />
+                                <Setter TargetName="border" Property="BorderBrush" Value="{DynamicResource DentalAccent}" />
                                 <Setter TargetName="border" Property="BorderThickness" Value="0,0,0,2" />
                             </Trigger>
                         </ControlTemplate.Triggers>
@@ -54,7 +47,7 @@
 
         <!-- Session list item style -->
         <Style x:Key="SessionListItemStyle" TargetType="ListBoxItem">
-            <Setter Property="Foreground" Value="#E0E0E0" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
             <Setter Property="Padding" Value="14,10" />
             <Setter Property="Template">
                 <Setter.Value>
@@ -62,16 +55,16 @@
                         <Border x:Name="border"
                                 Background="Transparent"
                                 Padding="{TemplateBinding Padding}"
-                                BorderBrush="#2A2A4A"
+                                BorderBrush="{DynamicResource BorderPrimary}"
                                 BorderThickness="0,0,0,1">
                             <ContentPresenter />
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#1E2A44" />
+                                <Setter TargetName="border" Property="Background" Value="{DynamicResource HoverBg}" />
                             </Trigger>
                             <Trigger Property="IsSelected" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#162B50" />
+                                <Setter TargetName="border" Property="Background" Value="{DynamicResource CardBg}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -81,7 +74,7 @@
 
         <!-- Small button style -->
         <Style x:Key="SmallButtonStyle" TargetType="Button">
-            <Setter Property="Foreground" Value="#E0E0E0" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
             <Setter Property="FontSize" Value="11" />
             <Setter Property="Padding" Value="10,5" />
             <Setter Property="Cursor" Value="Hand" />
@@ -89,17 +82,17 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="border"
-                                Background="#37474F"
+                                Background="{DynamicResource ToolbarBtnBg}"
                                 CornerRadius="4"
                                 Padding="{TemplateBinding Padding}"
-                                BorderBrush="#455A64"
+                                BorderBrush="{DynamicResource ToolbarBtnBorder}"
                                 BorderThickness="1">
                             <ContentPresenter HorizontalAlignment="Center"
                                               VerticalAlignment="Center" />
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#455A64" />
+                                <Setter TargetName="border" Property="Background" Value="{DynamicResource ToolbarBtnHover}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -109,7 +102,7 @@
 
         <!-- Header button -->
         <Style x:Key="HeaderButtonStyle" TargetType="Button">
-            <Setter Property="Foreground" Value="#E0E0E0" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
             <Setter Property="FontSize" Value="12" />
             <Setter Property="Padding" Value="14,8" />
             <Setter Property="Cursor" Value="Hand" />
@@ -117,17 +110,17 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="border"
-                                Background="#0F3460"
+                                Background="{DynamicResource AccentBtnBg}"
                                 CornerRadius="6"
                                 Padding="{TemplateBinding Padding}"
-                                BorderBrush="#2A2A4A"
+                                BorderBrush="{DynamicResource BorderPrimary}"
                                 BorderThickness="1">
                             <ContentPresenter HorizontalAlignment="Center"
                                               VerticalAlignment="Center" />
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#1A4A7A" />
+                                <Setter TargetName="border" Property="Background" Value="{DynamicResource AccentBtnHover}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -139,9 +132,9 @@
     <DockPanel>
         <!-- Header bar -->
         <Border DockPanel.Dock="Top"
-                Background="#16213E"
+                Background="{DynamicResource PanelBg}"
                 Padding="16,12"
-                BorderBrush="#2A2A4A"
+                BorderBrush="{DynamicResource BorderPrimary}"
                 BorderThickness="0,0,0,1">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -151,11 +144,11 @@
 
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="Patient History"
-                               Foreground="White"
+                               Foreground="{DynamicResource TextPrimary}"
                                FontSize="18"
                                FontWeight="SemiBold"
                                VerticalAlignment="Center" />
-                    <TextBlock Foreground="#8892A0"
+                    <TextBlock Foreground="{DynamicResource TextSecondary}"
                                FontSize="12"
                                VerticalAlignment="Center"
                                Margin="12,0,0,0">
@@ -180,15 +173,15 @@
 
             <!-- Left: Patient list -->
             <Border Grid.Column="0"
-                    Background="#16213E"
-                    BorderBrush="#2A2A4A"
+                    Background="{DynamicResource PanelBg}"
+                    BorderBrush="{DynamicResource BorderPrimary}"
                     BorderThickness="0,0,1,0">
                 <DockPanel>
                     <!-- Column header -->
                     <Border DockPanel.Dock="Top"
-                            Background="#111128"
+                            Background="{DynamicResource FieldBg}"
                             Padding="12,8"
-                            BorderBrush="#2A2A4A"
+                            BorderBrush="{DynamicResource BorderPrimary}"
                             BorderThickness="0,0,0,1">
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -198,17 +191,17 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0"
                                        Text="PATIENT"
-                                       Foreground="#8892A0"
+                                       Foreground="{DynamicResource TextSecondary}"
                                        FontSize="10"
                                        FontWeight="SemiBold" />
                             <TextBlock Grid.Column="1"
                                        Text="LAST SCAN"
-                                       Foreground="#8892A0"
+                                       Foreground="{DynamicResource TextSecondary}"
                                        FontSize="10"
                                        FontWeight="SemiBold" />
                             <TextBlock Grid.Column="2"
                                        Text="#"
-                                       Foreground="#8892A0"
+                                       Foreground="{DynamicResource TextSecondary}"
                                        FontSize="10"
                                        FontWeight="SemiBold"
                                        HorizontalAlignment="Right" />
@@ -235,12 +228,12 @@
 
                                     <TextBlock Grid.Row="0" Grid.Column="0"
                                                Text="{Binding DisplayName}"
-                                               Foreground="#E0E0E0"
+                                               Foreground="{DynamicResource TextPrimary}"
                                                FontSize="13"
                                                FontWeight="SemiBold"
                                                TextTrimming="CharacterEllipsis" />
                                     <TextBlock Grid.Row="0" Grid.Column="1"
-                                               Foreground="#4FC3F7"
+                                               Foreground="{DynamicResource DentalAccent}"
                                                FontSize="11"
                                                FontFamily="Consolas"
                                                HorizontalAlignment="Right"
@@ -250,7 +243,7 @@
                                     </TextBlock>
                                     <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
                                                Text="{Binding LastScan}"
-                                               Foreground="#8892A0"
+                                               Foreground="{DynamicResource TextSecondary}"
                                                FontSize="11"
                                                Margin="0,2,0,0" />
                                 </Grid>
@@ -262,13 +255,13 @@
 
             <!-- Right: Session details -->
             <Border Grid.Column="1"
-                    Background="#1A1A2E">
+                    Background="{DynamicResource WindowBg}">
                 <DockPanel>
                     <!-- Session header -->
                     <Border DockPanel.Dock="Top"
-                            Background="#111128"
+                            Background="{DynamicResource FieldBg}"
                             Padding="14,8"
-                            BorderBrush="#2A2A4A"
+                            BorderBrush="{DynamicResource BorderPrimary}"
                             BorderThickness="0,0,0,1">
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -276,12 +269,12 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0"
-                                       Foreground="#8892A0"
+                                       Foreground="{DynamicResource TextSecondary}"
                                        FontSize="10"
                                        FontWeight="SemiBold">
                                 <Run Text="SESSIONS FOR: " />
                                 <Run Text="{Binding SelectedPatient.DisplayName, Mode=OneWay, FallbackValue='(none selected)'}"
-                                     Foreground="#E0E0E0" />
+                                     Foreground="{DynamicResource TextPrimary}" />
                             </TextBlock>
                             <Button Grid.Column="1"
                                     Content="Open Folder"
@@ -293,7 +286,7 @@
 
                     <!-- No sessions placeholder -->
                     <TextBlock Text="Select a patient to view sessions"
-                               Foreground="#3A3A5A"
+                               Foreground="{DynamicResource TextMuted}"
                                FontSize="14"
                                HorizontalAlignment="Center"
                                VerticalAlignment="Center">
@@ -335,7 +328,7 @@
 
                                     <StackPanel Grid.Column="0">
                                         <!-- Timestamp -->
-                                        <TextBlock Foreground="#E0E0E0"
+                                        <TextBlock Foreground="{DynamicResource TextPrimary}"
                                                    FontSize="13"
                                                    FontWeight="SemiBold">
                                             <Run Text="{Binding Timestamp, Mode=OneWay}" />
@@ -343,15 +336,15 @@
 
                                         <!-- Details row -->
                                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                            <Border Background="#0F3460"
+                                            <Border Background="{DynamicResource ExamBadgeBg}"
                                                     CornerRadius="3"
                                                     Padding="6,2"
                                                     Margin="0,0,8,0">
                                                 <TextBlock Text="{Binding ExamType}"
-                                                           Foreground="#4FC3F7"
+                                                           Foreground="{DynamicResource ExamBadgeFg}"
                                                            FontSize="11" />
                                             </Border>
-                                            <TextBlock Foreground="#8892A0"
+                                            <TextBlock Foreground="{DynamicResource TextSecondary}"
                                                        FontSize="11"
                                                        VerticalAlignment="Center">
                                                 <Run Text="{Binding KvPeak, StringFormat='{}{0:F1} kV', Mode=OneWay}" />
@@ -362,7 +355,7 @@
                                         </StackPanel>
 
                                         <!-- Image file -->
-                                        <TextBlock Foreground="#5A5A6A"
+                                        <TextBlock Foreground="{DynamicResource TextMuted}"
                                                    FontSize="10"
                                                    FontFamily="Consolas"
                                                    Margin="0,3,0,0"

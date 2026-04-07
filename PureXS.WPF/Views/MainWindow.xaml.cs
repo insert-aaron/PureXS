@@ -48,6 +48,14 @@ public partial class MainWindow : Window
         };
     }
 
+    /// <summary>
+    /// Toggles between dark and light theme. Wire to a button or keyboard shortcut.
+    /// </summary>
+    public void ToggleTheme()
+    {
+        App.ToggleTheme();
+    }
+
     // ── Custom title bar drag ───────────────────────────────────────────
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
     {
@@ -95,10 +103,6 @@ public partial class MainWindow : Window
         double relY = mousePos.Y - containerCenterY;
 
         // Adjust pan so the point under the cursor stays fixed.
-        // Before zoom: image point = (relX - PanX) / oldZoom
-        // After zoom:  same image point should map to same screen pos
-        // So: relX - newPanX = imagePoint * newZoom
-        //     newPanX = relX - (relX - PanX) / oldZoom * newZoom
         ViewModel.PanX = relX - (relX - ViewModel.PanX) / oldZoom * newZoom;
         ViewModel.PanY = relY - (relY - ViewModel.PanY) / oldZoom * newZoom;
         ViewModel.ZoomLevel = newZoom;
@@ -152,5 +156,4 @@ public partial class MainWindow : Window
         ImageContainer.ReleaseMouseCapture();
         e.Handled = true;
     }
-
 }

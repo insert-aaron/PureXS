@@ -6,7 +6,7 @@
         WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize"
         WindowStyle="SingleBorderWindow"
-        Background="#1A1A2E"
+        Background="{DynamicResource WindowBg}"
         FontFamily="Segoe UI">
 
     <Grid Margin="24,20,24,16">
@@ -19,7 +19,7 @@
 
         <TextBlock Grid.Row="0"
                    Text="Enter your PureChart facility token:"
-                   Foreground="#E0E0E0"
+                   Foreground="{DynamicResource TextPrimary}"
                    FontSize="14"
                    Margin="0,0,0,12"/>
 
@@ -28,11 +28,11 @@
                  FontSize="13"
                  FontFamily="Consolas"
                  Padding="8,6"
-                 Background="#0F0F23"
-                 Foreground="#FFFFFF"
-                 BorderBrush="#3A3A5C"
+                 Background="{DynamicResource FieldBg}"
+                 Foreground="{DynamicResource TextPrimary}"
+                 BorderBrush="{DynamicResource BorderSubtle}"
                  BorderThickness="1"
-                 CaretBrush="#FFFFFF"/>
+                 CaretBrush="{DynamicResource TextPrimary}"/>
 
         <StackPanel Grid.Row="3"
                     Orientation="Horizontal"
@@ -42,18 +42,18 @@
                     Margin="0,0,10,0"
                     IsCancel="True"
                     Click="Cancel_Click"
-                    Background="#2A2A4A"
-                    Foreground="#C0C0C0"
-                    BorderBrush="#3A3A5C"
+                    Background="{DynamicResource ToolbarBtnBg}"
+                    Foreground="{DynamicResource TextSecondary}"
+                    BorderBrush="{DynamicResource BorderSubtle}"
                     FontSize="13"
                     Cursor="Hand"/>
             <Button Content="OK"
                     Width="80" Height="30"
                     IsDefault="True"
                     Click="OK_Click"
-                    Background="#4A90D9"
-                    Foreground="#FFFFFF"
-                    BorderBrush="#4A90D9"
+                    Background="{DynamicResource DentalBlue}"
+                    Foreground="White"
+                    BorderBrush="{DynamicResource DentalBlue}"
                     FontSize="13"
                     FontWeight="SemiBold"
                     Cursor="Hand"/>
