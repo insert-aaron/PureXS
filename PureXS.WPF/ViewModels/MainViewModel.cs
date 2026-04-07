@@ -1211,10 +1211,10 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             IsExposing = false;
         });
 
-        _log.Log($"Image received, {rawBytes.Length} raw bytes, elapsed={exposeElapsed:F1}s, processing...");
+        _log.Log($"Image received, {rawBytes.Length} raw bytes, {_scanlines.Count} live scanlines, elapsed={exposeElapsed:F1}s, processing...");
         _toast.Show("Processing scan image...", "info", 2000);
 
-        // Run the decoder — produces a finished PNG (panoramic or ceph)
+        // Run the Python decoder — produces a finished PNG (panoramic or ceph)
         byte[]? processedBytes = null;
         try
         {
@@ -1222,55 +1222,98 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"[MainVM] Decoder failed: {ex.Message}");
+            Debug.WriteLine($"[MainVM] Decoder failed: {ex.Message}");
             _log.Log($"Image decoder failed: {ex.Message}", "warning");
-            _toast.Show("Decoder unavailable, showing raw preview", "warning", 4000);
         }
 
-        // Fall back to raw bytes if decoder is not available or fails
-        var displayBytes = processedBytes ?? rawBytes;
+        // If Python decoder failed/unavailable, build image from live-parsed scanlines
+        // This mirrors the Python flow: _extract_panoramic → reconstruct_image
+        // We already have scanlines from ParseLiveScanlines() during Phase 2
+        BitmapSource? fallbackBitmap = null;
+        if (processedBytes is null && _scanlines.Count > 0)
+        {
+            _log.Log($"Python decoder unavailable — building image from {_scanlines.Count} live scanlines");
+            _toast.Show($"Building image from {_scanlines.Count} scanlines...", "info", 2000);
+            fallbackBitmap = BuildImageFromScanlines(_scanlines);
+        }
 
         Application.Current.Dispatcher.Invoke(() =>
         {
             try
             {
-                _lastImageBytes = displayBytes;
+                BitmapSource? displayBitmap = null;
+                var decoderUsed = false;
 
-                var bitmap = new BitmapImage();
-                using var ms = new System.IO.MemoryStream(displayBytes);
-                bitmap.BeginInit();
-                bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                bitmap.StreamSource = ms;
-                bitmap.EndInit();
-                bitmap.Freeze();
-                ReceivedImage = bitmap;
+                // Path 1: Python decoder produced a valid PNG
+                if (processedBytes is not null)
+                {
+                    _lastImageBytes = processedBytes;
+                    var bitmap = new BitmapImage();
+                    using var ms = new MemoryStream(processedBytes);
+                    bitmap.BeginInit();
+                    bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                    bitmap.StreamSource = ms;
+                    bitmap.EndInit();
+                    bitmap.Freeze();
+                    displayBitmap = bitmap;
+                    decoderUsed = true;
+                }
+                // Path 2: Use scanline-based fallback image
+                else if (fallbackBitmap is not null)
+                {
+                    // Encode the fallback bitmap to PNG bytes for _lastImageBytes
+                    var encoder = new PngBitmapEncoder();
+                    encoder.Frames.Add(BitmapFrame.Create(fallbackBitmap));
+                    using var ms = new MemoryStream();
+                    encoder.Save(ms);
+                    _lastImageBytes = ms.ToArray();
+                    displayBitmap = fallbackBitmap;
+                    _log.Log($"Scanline fallback image: {fallbackBitmap.PixelWidth}x{fallbackBitmap.PixelHeight}");
+                }
 
-                // Reset viewer state for new image
-                ZoomLevel = 1.0;
-                PanX = 0;
-                PanY = 0;
-                Brightness = 0;
-                Contrast = 1.0;
+                if (displayBitmap is not null)
+                {
+                    ReceivedImage = displayBitmap;
 
-                IsReviewingImage = true;
-                MachineStatus = processedBytes is not null
-                    ? "Scan complete — review image"
-                    : "Scan complete — raw preview (decoder unavailable)";
-                MachineIndicator = new SolidColorBrush(Color.FromRgb(79, 195, 247));
-                ReviewStatus = "Review the image with the patient";
-                ReviewStatusColor = new SolidColorBrush(Color.FromRgb(79, 195, 247));
-                PhaseLabel = "";
+                    // Reset viewer state for new image
+                    ZoomLevel = 1.0;
+                    PanX = 0;
+                    PanY = 0;
+                    Brightness = 0;
+                    Contrast = 1.0;
 
-                // Increment expose counter
-                ExposeCount++;
+                    IsReviewingImage = true;
+                    MachineStatus = decoderUsed
+                        ? "Scan complete — review image"
+                        : $"Scan complete — {_scanlines.Count} scanlines (basic reconstruction)";
+                    MachineIndicator = new SolidColorBrush(Color.FromRgb(79, 195, 247));
+                    ReviewStatus = "Review the image with the patient";
+                    ReviewStatusColor = new SolidColorBrush(Color.FromRgb(79, 195, 247));
+                    PhaseLabel = "";
 
-                _toast.Show("Scan complete -- ready for review", "success", 3000);
-                _log.Log($"Image displayed, {displayBytes.Length} bytes, decoded={processedBytes is not null}");
+                    ExposeCount++;
+                    _toast.Show("Scan complete — ready for review", "success", 3000);
+                    _log.Log($"Image displayed, {_lastImageBytes?.Length ?? 0} bytes, decoder={decoderUsed}");
+                }
+                else
+                {
+                    // No decoder AND no scanlines — save raw bytes for offline recovery
+                    _lastImageBytes = rawBytes;
+                    MachineStatus = $"Scan complete — {rawBytes.Length:N0} bytes saved (decoder unavailable, 0 scanlines)";
+                    MachineIndicator = new SolidColorBrush(Color.FromRgb(255, 167, 38));
+                    PhaseLabel = "";
+                    IsExposing = false;
+                    _toast.Show("Raw scan data saved — decoder unavailable and no scanlines parsed", "warning", 6000);
+                    _log.Log($"No image produced: decoder unavailable, 0 scanlines. Raw bytes saved ({rawBytes.Length})", "warning");
+                }
             }
             catch (Exception ex)
             {
-                _toast.Show("Failed to display image", "error", 5000);
+                _toast.Show($"Image display error: {ex.Message}", "error", 5000);
                 _log.Log($"Image display error: {ex.Message}", "error");
+                MachineStatus = "Scan data received — display failed";
+                PhaseLabel = "";
+                IsExposing = false;
             }
         });
 
@@ -1285,6 +1328,55 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         {
             _ = ExportDicomInBackgroundAsync(SelectedPatient, _lastImageBytes);
         }
+    }
+
+    /// <summary>
+    /// Builds a displayable grayscale image from live-parsed scanlines.
+    /// This is the C# equivalent of Python's reconstruct_image() basic path:
+    /// percentile stretch (2nd-98th) → 8-bit grayscale → invert (MONOCHROME1).
+    /// Used as fallback when the Python decoder subprocess is unavailable.
+    /// </summary>
+    private static BitmapSource? BuildImageFromScanlines(List<ScanlineData> scanlines)
+    {
+        if (scanlines.Count == 0) return null;
+
+        var nCols = scanlines.Count;
+        var nRows = scanlines[0].PixelCount;
+        if (nRows == 0) return null;
+
+        // Collect non-zero pixel values for percentile calculation
+        var allValues = new List<ushort>(nCols * nRows);
+        foreach (var sl in scanlines)
+            foreach (var px in sl.Pixels)
+                if (px > 0) allValues.Add(px);
+
+        if (allValues.Count == 0) return null;
+
+        allValues.Sort();
+        var low = (double)allValues[(int)(allValues.Count * 0.02)];
+        var high = (double)allValues[(int)(allValues.Count * 0.98)];
+        if (high <= low) high = low + 1;
+
+        // Build 8-bit grayscale pixel array with percentile stretch + invert
+        var pixels = new byte[nRows * nCols];
+        for (var col = 0; col < nCols; col++)
+        {
+            var sl = scanlines[col];
+            var count = Math.Min(sl.PixelCount, nRows);
+            for (var row = 0; row < count; row++)
+            {
+                var normalized = Math.Clamp((sl.Pixels[row] - low) / (high - low), 0, 1);
+                // Invert: MONOCHROME1 convention (bone = white on dark background)
+                pixels[row * nCols + col] = (byte)((1.0 - normalized) * 255);
+            }
+        }
+
+        var bmp = BitmapSource.Create(
+            nCols, nRows, 96, 96,
+            PixelFormats.Gray8, null,
+            pixels, nCols);
+        bmp.Freeze();
+        return bmp;
     }
 
     private async Task SavePatientOutputAsync(double exposeElapsed)

@@ -16,4 +16,20 @@
     <PackageReference Include="fo-dicom" Version="5.1.3" />
   </ItemGroup>
 
+  <!-- Copy Python decoder pipeline into build output as decoder/ subdirectory -->
+  <ItemGroup>
+    <None Include="..\purexs_decoder_cli.py" Link="decoder\purexs_decoder_cli.py">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\hb_decoder.py" Link="decoder\hb_decoder.py">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\utils.py" Link="decoder\utils.py">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\dicom_export.py" Link="decoder\dicom_export.py">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>
