@@ -42,6 +42,8 @@ public sealed class SironaService : ISironaService
     private const int HeartbeatIntervalMs = 900;      // matches Python hb_interval=0.9
     private const double SessionRefreshSeconds = 1.5;  // matches Python SESSION_REFRESH_S
     private const int ReconnectHeartbeatGate = 10;
+    private const int ScanIdleTimeoutMs = 2000;       // matches Python sock.settimeout(2.0) — end-of-stream detection
+    private const int ExposeHardTimeoutMs = 90_000;    // matches Python EXPOSE_TIMEOUT_S — hard fallback
 
     // Live parsing markers
     private static readonly byte[] ScanlineMarker = [0x00, 0x01, 0x00, 0xF0];
@@ -649,9 +651,45 @@ public sealed class SironaService : ISironaService
         {
             while (!ct.IsCancellationRequested && _stream is not null)
             {
-                var bytesRead = await _stream.ReadAsync(buffer.AsMemory(0, buffer.Length), ct);
+                int bytesRead;
+
+                if (_session.IsExposing)
+                {
+                    // During exposure: use a 2-second idle timeout to detect
+                    // end-of-stream, matching Python's sock.settimeout(2.0).
+                    // ReadAsync doesn't respect ReceiveTimeout, so we use a
+                    // CancellationToken with a timeout instead.
+                    using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    idleCts.CancelAfter(ScanIdleTimeoutMs);
+
+                    try
+                    {
+                        bytesRead = await _stream.ReadAsync(buffer.AsMemory(0, buffer.Length), idleCts.Token);
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                    {
+                        // Idle timeout — no data for 2s, scan stream has ended
+                        Debug.WriteLine($"[Sirona] Scan stream idle timeout ({ScanIdleTimeoutMs}ms) — completing exposure with {_session.ImageBuffer.Count} bytes");
+                        CompleteExposure();
+                        return;
+                    }
+                }
+                else
+                {
+                    bytesRead = await _stream.ReadAsync(buffer.AsMemory(0, buffer.Length), ct);
+                }
+
                 if (bytesRead == 0)
+                {
+                    // Connection closed — if we were exposing, complete with what we have
+                    if (_session.IsExposing)
+                    {
+                        Debug.WriteLine($"[Sirona] Connection closed during exposure — completing with {_session.ImageBuffer.Count} bytes");
+                        CompleteExposure();
+                        return;
+                    }
                     break;
+                }
 
                 var data = buffer[..bytesRead];
 
@@ -663,18 +701,13 @@ public sealed class SironaService : ISironaService
 
                     if (_session.IsExposing)
                     {
-                        _session.IsExposing = false;
-
-                        // Send IMAGE_ACK (matches Python behavior)
-                        try { await SendSessionFrameAsync(FC_IMAGE_ACK, ct: ct); }
-                        catch { /* best effort */ }
-
-                        var imageBytes = _session.ImageBuffer.ToArray();
-                        if (imageBytes.Length > 0)
-                            ImageReceived?.Invoke(this, imageBytes);
+                        Debug.WriteLine($"[Sirona] PostScanDisconnect marker found — completing exposure with {_session.ImageBuffer.Count} bytes");
+                        CompleteExposure();
                     }
-
-                    _ = ReconnectAsync();
+                    else
+                    {
+                        _ = ReconnectAsync();
+                    }
                     return;
                 }
 
@@ -688,6 +721,9 @@ public sealed class SironaService : ISironaService
                         _session.IsExposing = true;
                         SetState(ConnectionState.Exposing);
                         ExposeStarted?.Invoke(this, EventArgs.Empty);
+
+                        // Start hard timeout watchdog (matches Python EXPOSE_TIMEOUT_S)
+                        _ = ExposeHardTimeoutAsync(ct);
 
                         // Seed the image buffer with any payload after the header
                         if (bytesRead > SESSION_HEADER_SIZE)
@@ -715,9 +751,62 @@ public sealed class SironaService : ISironaService
         catch (Exception ex)
         {
             Debug.WriteLine($"[Sirona] Reader error: {ex.Message}");
+
+            // If we were mid-expose when connection dropped, complete with what we have
+            if (_session.IsExposing && _session.ImageBuffer.Count > 0)
+            {
+                Debug.WriteLine($"[Sirona] Reader error during exposure — completing with {_session.ImageBuffer.Count} bytes");
+                CompleteExposure();
+                return;
+            }
+
             if (!ct.IsCancellationRequested)
                 _ = ReconnectAsync();
         }
+    }
+
+    /// <summary>
+    /// Finalizes an exposure: sends IMAGE_ACK, fires ImageReceived, and reconnects.
+    /// Matches the Python flow where _recv_scan_data ends on socket timeout,
+    /// then events are fired and reconnect happens.
+    /// </summary>
+    private void CompleteExposure()
+    {
+        _session.IsExposing = false;
+        _session.IsPostScanDisconnect = true;
+        _armed = false;
+
+        // Send IMAGE_ACK (best effort, matches Python behavior)
+        try { _ = SendSessionFrameAsync(FC_IMAGE_ACK); }
+        catch { /* best effort */ }
+
+        var imageBytes = _session.ImageBuffer.ToArray();
+        Debug.WriteLine($"[Sirona] CompleteExposure — {imageBytes.Length} bytes, firing ImageReceived");
+
+        if (imageBytes.Length > 0)
+            ImageReceived?.Invoke(this, imageBytes);
+
+        _ = ReconnectAsync();
+    }
+
+    /// <summary>
+    /// Hard timeout watchdog: if exposure hasn't completed within 90 seconds,
+    /// force-complete with whatever data we have. Matches Python's
+    /// _on_expose_timeout() fallback.
+    /// </summary>
+    private async Task ExposeHardTimeoutAsync(CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(ExposeHardTimeoutMs, ct);
+
+            if (_session.IsExposing)
+            {
+                Debug.WriteLine($"[Sirona] Hard exposure timeout ({ExposeHardTimeoutMs}ms) — force-completing with {_session.ImageBuffer.Count} bytes");
+                CompleteExposure();
+            }
+        }
+        catch (OperationCanceledException) { /* Normal — exposure completed before timeout */ }
     }
 
     // ── Reconnect logic ─────────────────────────────────────────────────────
