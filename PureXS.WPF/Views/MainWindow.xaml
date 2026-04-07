@@ -75,7 +75,7 @@
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="border"
                                 Background="{TemplateBinding Background}"
-                                CornerRadius="6"
+                                CornerRadius="8"
                                 Padding="{TemplateBinding Padding}"
                                 BorderBrush="{DynamicResource BorderPrimary}"
                                 BorderThickness="1">
@@ -107,7 +107,7 @@
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="border"
                                 Background="{DynamicResource ToolbarBtnBg}"
-                                CornerRadius="6"
+                                CornerRadius="8"
                                 Padding="{TemplateBinding Padding}"
                                 BorderBrush="{DynamicResource ToolbarBtnBorder}"
                                 BorderThickness="1">
@@ -139,7 +139,7 @@
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="border"
                                 Background="{DynamicResource GreenBtnBg}"
-                                CornerRadius="6"
+                                CornerRadius="8"
                                 Padding="{TemplateBinding Padding}"
                                 BorderBrush="{DynamicResource GreenBtnBorder}"
                                 BorderThickness="1">
@@ -171,7 +171,7 @@
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="border"
                                 Background="{DynamicResource PurpleBtnBg}"
-                                CornerRadius="6"
+                                CornerRadius="8"
                                 Padding="{TemplateBinding Padding}"
                                 BorderBrush="{DynamicResource PurpleBtnBorder}"
                                 BorderThickness="1">
@@ -203,7 +203,7 @@
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="border"
                                 Background="{DynamicResource BlueBtnBg}"
-                                CornerRadius="6"
+                                CornerRadius="8"
                                 Padding="{TemplateBinding Padding}"
                                 BorderBrush="{DynamicResource BlueBtnBorder}"
                                 BorderThickness="1">
@@ -235,7 +235,7 @@
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="border"
                                 Background="{DynamicResource OrangeBtnBg}"
-                                CornerRadius="6"
+                                CornerRadius="8"
                                 Padding="{TemplateBinding Padding}"
                                 BorderBrush="{DynamicResource OrangeBtnBorder}"
                                 BorderThickness="1">
@@ -268,7 +268,7 @@
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="border"
                                 Background="{DynamicResource DangerBg}"
-                                CornerRadius="6"
+                                CornerRadius="8"
                                 Padding="{TemplateBinding Padding}"
                                 BorderBrush="{DynamicResource DangerBorder}"
                                 BorderThickness="1">
@@ -541,8 +541,10 @@
         <Border DockPanel.Dock="Bottom"
                 Background="{DynamicResource BottomToolbarBg}"
                 Padding="14,8"
+                Margin="6,4,6,0"
+                CornerRadius="12,12,0,0"
                 BorderBrush="{DynamicResource BorderPrimary}"
-                BorderThickness="0,1,0,0">
+                BorderThickness="1,1,1,0">
             <StackPanel>
                 <!-- Row 1: Image info + Brightness + Contrast sliders -->
                 <Grid Margin="0,0,0,8">
@@ -650,7 +652,7 @@
         <!-- ================================================================ -->
         <!-- MAIN CONTENT (3 columns: avatar dock | left panel | image)       -->
         <!-- ================================================================ -->
-        <Grid Margin="0">
+        <Grid Margin="6">
             <Grid.ColumnDefinitions>
                 <!-- Avatar Dock: 88px collapsed, 280px when search expanded -->
                 <ColumnDefinition>
@@ -678,8 +680,11 @@
             <Border Grid.Column="0"
                     Background="{DynamicResource PanelBg}"
                     Padding="4"
+                    CornerRadius="12"
+                    Margin="0,0,4,0"
                     BorderBrush="{DynamicResource BorderPrimary}"
-                    BorderThickness="0,0,1,0"
+                    BorderThickness="1"
+                    ClipToBounds="True"
                     Visibility="{Binding IsDockVisible, Converter={StaticResource BoolToVis}}">
                 <DockPanel>
                     <!-- Search icon button (always visible at top) -->
@@ -1037,8 +1042,11 @@
             <Border Grid.Column="1"
                     Background="{DynamicResource PanelBg}"
                     Padding="14"
+                    CornerRadius="12"
+                    Margin="0,0,4,0"
                     BorderBrush="{DynamicResource BorderPrimary}"
-                    BorderThickness="0,0,1,0">
+                    BorderThickness="1"
+                    ClipToBounds="True">
                 <ScrollViewer VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled">
                 <StackPanel>
@@ -1134,7 +1142,7 @@
                                                 <ControlTemplate TargetType="Button">
                                                     <Border x:Name="ptRow"
                                                             Background="{DynamicResource FieldBg}"
-                                                            CornerRadius="6"
+                                                            CornerRadius="8"
                                                             Padding="8,6"
                                                             BorderBrush="{DynamicResource BorderPrimary}"
                                                             BorderThickness="1">
@@ -1282,7 +1290,7 @@
                             </Style>
                         </Border.Style>
                         <Border Background="{DynamicResource FieldBg}"
-                                CornerRadius="10"
+                                CornerRadius="12"
                                 Padding="14"
                                 BorderBrush="{DynamicResource BorderPrimary}"
                                 BorderThickness="1">
@@ -1472,7 +1480,7 @@
                     <!-- ── kV Gauge (visible during expose) ──────────── -->
                     <Border Margin="0,14,0,0"
                             Background="{DynamicResource FieldBg}"
-                            CornerRadius="6"
+                            CornerRadius="8"
                             Padding="12,8"
                             Visibility="{Binding IsKvActive, Converter={StaticResource BoolToVis}}">
                         <StackPanel>
@@ -1503,7 +1511,7 @@
                     <!-- ── Scanline Preview (visible during expose) ──── -->
                     <Border Margin="0,10,0,0"
                             Background="{DynamicResource ImageViewerBg}"
-                            CornerRadius="6"
+                            CornerRadius="8"
                             Padding="4"
                             Visibility="{Binding IsKvActive, Converter={StaticResource BoolToVis}}">
                         <StackPanel>
@@ -1598,6 +1606,9 @@
             <!-- ============================================================ -->
             <Border Grid.Column="2"
                     Background="{DynamicResource ImageViewerBg}"
+                    CornerRadius="12"
+                    BorderBrush="{DynamicResource BorderPrimary}"
+                    BorderThickness="1"
                     ClipToBounds="True"
                     x:Name="ImageContainer">
                 <Grid>
@@ -1662,7 +1673,7 @@
                             <ControlTemplate TargetType="Button">
                                 <Border x:Name="border"
                                         Background="{DynamicResource Accent700}"
-                                        CornerRadius="6"
+                                        CornerRadius="8"
                                         Padding="{TemplateBinding Padding}"
                                         Opacity="0.85">
                                     <ContentPresenter HorizontalAlignment="Center"

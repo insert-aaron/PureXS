@@ -83,7 +83,7 @@
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="border"
                                 Background="{DynamicResource ToolbarBtnBg}"
-                                CornerRadius="4"
+                                CornerRadius="8"
                                 Padding="{TemplateBinding Padding}"
                                 BorderBrush="{DynamicResource ToolbarBtnBorder}"
                                 BorderThickness="1">
@@ -111,7 +111,7 @@
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="border"
                                 Background="{DynamicResource AccentBtnBg}"
-                                CornerRadius="6"
+                                CornerRadius="8"
                                 Padding="{TemplateBinding Padding}"
                                 BorderBrush="{DynamicResource BorderPrimary}"
                                 BorderThickness="1">
