@@ -330,6 +330,8 @@
                     <ColumnDefinition Width="*" />      <!-- spacer -->
                     <ColumnDefinition Width="Auto" />  <!-- API status -->
                     <ColumnDefinition Width="14" />
+                    <ColumnDefinition Width="Auto" />  <!-- Theme toggle -->
+                    <ColumnDefinition Width="10" />
                     <ColumnDefinition Width="Auto" />  <!-- Window controls -->
                 </Grid.ColumnDefinitions>
 
@@ -387,8 +389,32 @@
                                TextTrimming="CharacterEllipsis" />
                 </StackPanel>
 
+                <!-- Theme toggle button -->
+                <Button x:Name="ThemeToggleBtn"
+                        Grid.Column="10"
+                        Content="&#xE793;"
+                        FontFamily="Segoe MDL2 Assets"
+                        FontSize="14"
+                        Foreground="White"
+                        ToolTip="Toggle Light / Dark Mode"
+                        Width="36" Height="30"
+                        Cursor="Hand">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="bd" Background="Transparent" CornerRadius="4" Padding="0">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="bd" Property="Background" Value="{DynamicResource WinControlHover}" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+
                 <!-- Window controls: Minimize, Maximize, Close -->
-                <StackPanel Grid.Column="10"
+                <StackPanel Grid.Column="12"
                             Orientation="Horizontal"
                             VerticalAlignment="Center">
                     <!-- Minimize -->

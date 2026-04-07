@@ -37,6 +37,9 @@ public partial class MainWindow : Window
         };
         CloseBtn.Click += (_, _) => Close();
 
+        // Theme toggle
+        ThemeToggleBtn.Click += (_, _) => ToggleTheme();
+
         // Auto-focus search box when search expands
         PatientSearchBox.IsVisibleChanged += (_, e) =>
         {
