@@ -404,7 +404,7 @@ public sealed class SironaService : ISironaService
         }
 
         // 3. DATA_SEND (patient payload) + continuation
-        var program = ExamTypeToProgram.GetValueOrDefault(examType, 0x01);
+        var program = ExamTypeToProgram.GetValueOrDefault(examType, (ushort)0x01);
         var continuation = BuildDataContinuation(program);
         Debug.WriteLine($"[Sirona] Exam type: {examType} → program=0x{program:X2}");
 

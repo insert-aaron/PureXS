@@ -1,7 +1,6 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Media;
-using iNKORE.UI.WPF.Modern;
 using PureXS.Services;
 using PureXS.ViewModels;
 using PureXS.Views;
@@ -15,9 +14,6 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
-
-        // Set iNKORE theme to Dark by default
-        ThemeManager.Current.ApplicationTheme = ApplicationTheme.Dark;
 
         // Apply dark mode brushes
         ApplyTheme(isDark: true);
@@ -110,11 +106,6 @@ public partial class App : Application
     {
         IsDarkMode = isDark;
         var res = Current.Resources;
-
-        // Sync iNKORE theme
-        ThemeManager.Current.ApplicationTheme = isDark
-            ? ApplicationTheme.Dark
-            : ApplicationTheme.Light;
 
         // ── Core Surfaces ─────────────────────────────────────────────
         SetBrush(res, "WindowBg",        isDark ? "#0F172A" : "#F8FAFC");

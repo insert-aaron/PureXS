@@ -2,8 +2,6 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:models="clr-namespace:PureXS.Models"
-        xmlns:ui="http://schemas.inkore.net/lib/ui/wpf/modern"
-        ui:ThemeManager.IsThemeAware="True"
         Title="PureXS — Sirona ORTHOPHOS XG"
         Width="1280" Height="800"
         MinWidth="1050" MinHeight="650"
