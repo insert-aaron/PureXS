@@ -3,7 +3,6 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:models="clr-namespace:PureXS.Models"
         xmlns:ui="http://schemas.inkore.net/lib/ui/wpf/modern"
-        ui:WindowHelper.SystemBackdropType="Mica"
         ui:ThemeManager.IsThemeAware="True"
         Title="PureXS — Sirona ORTHOPHOS XG"
         Width="1280" Height="800"
