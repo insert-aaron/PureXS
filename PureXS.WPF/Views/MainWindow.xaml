@@ -774,63 +774,111 @@
                                         <Button.Template>
                                             <ControlTemplate TargetType="Button">
                                                 <Border x:Name="avatarBorder"
-                                                        Width="72" Height="72"
-                                                        CornerRadius="14"
+                                                        CornerRadius="18"
                                                         Background="{DynamicResource FieldBg}"
                                                         BorderBrush="{DynamicResource BorderPrimary}"
                                                         BorderThickness="2"
                                                         ClipToBounds="True"
-                                                        HorizontalAlignment="Center"
+                                                        HorizontalAlignment="Stretch"
                                                         RenderTransformOrigin="0.5,0.5">
+                                                    <Border.Style>
+                                                        <Style TargetType="Border">
+                                                            <!-- Collapsed: square tile -->
+                                                            <Setter Property="Width" Value="72" />
+                                                            <Setter Property="Height" Value="72" />
+                                                            <Setter Property="HorizontalAlignment" Value="Center" />
+                                                            <Style.Triggers>
+                                                                <!-- Expanded: full-width card -->
+                                                                <DataTrigger Binding="{Binding DataContext.IsSearchExpanded, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
+                                                                    <Setter Property="Width" Value="Auto" />
+                                                                    <Setter Property="Height" Value="Auto" />
+                                                                    <Setter Property="HorizontalAlignment" Value="Stretch" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Border.Style>
                                                     <Border.RenderTransform>
                                                         <ScaleTransform ScaleX="1" ScaleY="1" />
                                                     </Border.RenderTransform>
                                                     <Grid>
-                                                        <!-- Profile picture -->
-                                                        <Image Source="{Binding ProfileImage}"
-                                                               Stretch="UniformToFill"
-                                                               RenderOptions.BitmapScalingMode="HighQuality" />
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="Auto" />
+                                                            <ColumnDefinition Width="*" />
+                                                        </Grid.ColumnDefinitions>
 
-                                                        <!-- Fallback initials when no image -->
-                                                        <Border Background="{DynamicResource InitialsBg}">
-                                                            <Border.Style>
-                                                                <Style TargetType="Border">
-                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                        <!-- Avatar (always visible) -->
+                                                        <Grid Grid.Column="0" Width="68" Height="68">
+                                                            <Image Source="{Binding ProfileImage}"
+                                                                   Stretch="UniformToFill"
+                                                                   RenderOptions.BitmapScalingMode="HighQuality" />
+                                                            <Border Background="{DynamicResource InitialsBg}">
+                                                                <Border.Style>
+                                                                    <Style TargetType="Border">
+                                                                        <Setter Property="Visibility" Value="Visible" />
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding HasProfileImage}" Value="True">
+                                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </Border.Style>
+                                                                <TextBlock Text="{Binding Initials}"
+                                                                           Foreground="White"
+                                                                           FontSize="20"
+                                                                           FontWeight="Bold"
+                                                                           HorizontalAlignment="Center"
+                                                                           VerticalAlignment="Center" />
+                                                            </Border>
+                                                        </Grid>
+
+                                                        <!-- Patient info (only when expanded) -->
+                                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="10,0,8,0">
+                                                            <StackPanel.Style>
+                                                                <Style TargetType="StackPanel">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
                                                                     <Style.Triggers>
-                                                                        <DataTrigger Binding="{Binding HasProfileImage}" Value="True">
-                                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                                        <DataTrigger Binding="{Binding DataContext.IsSearchExpanded, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
+                                                                            <Setter Property="Visibility" Value="Visible" />
                                                                         </DataTrigger>
                                                                     </Style.Triggers>
                                                                 </Style>
-                                                            </Border.Style>
-                                                            <TextBlock Text="{Binding Initials}"
-                                                                       Foreground="White"
-                                                                       FontSize="20"
-                                                                       FontWeight="Bold"
-                                                                       HorizontalAlignment="Center"
-                                                                       VerticalAlignment="Center" />
-                                                        </Border>
+                                                            </StackPanel.Style>
+                                                            <TextBlock Foreground="{DynamicResource TextPrimary}"
+                                                                       FontSize="13" FontWeight="SemiBold"
+                                                                       TextTrimming="CharacterEllipsis">
+                                                                <Run Text="{Binding FirstName, Mode=OneWay}" />
+                                                                <Run Text=" " />
+                                                                <Run Text="{Binding LastName, Mode=OneWay}" />
+                                                            </TextBlock>
+                                                            <TextBlock Text="{Binding Dob}"
+                                                                       Foreground="{DynamicResource TextSecondary}"
+                                                                       FontSize="10" Margin="0,2,0,0" />
+                                                            <TextBlock Text="{Binding MedicalRecordNumber}"
+                                                                       Foreground="{DynamicResource DentalAccent}"
+                                                                       FontSize="9" FontFamily="Consolas"
+                                                                       Margin="0,1,0,0" />
+                                                        </StackPanel>
 
                                                         <!-- Selection highlight -->
                                                         <Border x:Name="selectionRing"
-                                                                CornerRadius="14"
+                                                                Grid.ColumnSpan="2"
+                                                                CornerRadius="18"
                                                                 BorderThickness="0"
                                                                 BorderBrush="{DynamicResource SelectionRing}"
                                                                 IsHitTestVisible="False" />
                                                     </Grid>
                                                 </Border>
                                                 <ControlTemplate.Triggers>
-                                                    <!-- Hover: animated scale up + accent glow -->
                                                     <EventTrigger RoutedEvent="MouseEnter">
                                                         <BeginStoryboard>
                                                             <Storyboard>
                                                                 <DoubleAnimation Storyboard.TargetName="avatarBorder"
                                                                                  Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
-                                                                                 To="1.12" Duration="0:0:0.15"
+                                                                                 To="1.04" Duration="0:0:0.15"
                                                                                  EasingFunction="{StaticResource EaseOut}" />
                                                                 <DoubleAnimation Storyboard.TargetName="avatarBorder"
                                                                                  Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
-                                                                                 To="1.12" Duration="0:0:0.15"
+                                                                                 To="1.04" Duration="0:0:0.15"
                                                                                  EasingFunction="{StaticResource EaseOut}" />
                                                             </Storyboard>
                                                         </BeginStoryboard>
@@ -1056,18 +1104,21 @@
                     <Border Height="1" Background="{DynamicResource BorderPrimary}" Margin="0,0,0,14" />
 
                     <!-- ── Patient Section ────────────────────────────── -->
-                    <!-- PureChart patient list (auto-hidden if API fails or patient set) -->
+                    <!-- PureChart patient list — only shown when dock is hidden (redundant otherwise) -->
                     <Border MaxHeight="220" Margin="0,0,0,6">
                         <Border.Style>
                             <Style TargetType="Border">
-                                <Setter Property="Visibility" Value="Visible" />
+                                <Setter Property="Visibility" Value="Collapsed" />
                                 <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsManualEntryMode}" Value="True">
-                                        <Setter Property="Visibility" Value="Collapsed" />
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding IsPatientSet}" Value="True">
-                                        <Setter Property="Visibility" Value="Collapsed" />
-                                    </DataTrigger>
+                                    <!-- Only show when dock is hidden AND PureChart works AND no patient set -->
+                                    <MultiDataTrigger>
+                                        <MultiDataTrigger.Conditions>
+                                            <Condition Binding="{Binding IsDockVisible}" Value="False" />
+                                            <Condition Binding="{Binding IsManualEntryMode}" Value="False" />
+                                            <Condition Binding="{Binding IsPatientSet}" Value="False" />
+                                        </MultiDataTrigger.Conditions>
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </MultiDataTrigger>
                                 </Style.Triggers>
                             </Style>
                         </Border.Style>
