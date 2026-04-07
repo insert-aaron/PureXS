@@ -915,12 +915,14 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             PureChartStatusColor = patients.Count > 0
                 ? new SolidColorBrush(Color.FromRgb(129, 199, 132))
                 : new SolidColorBrush(Color.FromRgb(117, 117, 117));
+            IsManualEntryMode = false;  // PureChart is working
         }
         catch (TaskCanceledException) { }
         catch
         {
             PureChartStatus = "PureChart unavailable";
             PureChartStatusColor = new SolidColorBrush(Color.FromRgb(239, 83, 80));
+            IsManualEntryMode = true;  // auto-fallback to manual entry
         }
         finally
         {

@@ -1056,79 +1056,7 @@
                     <Border Height="1" Background="{DynamicResource BorderPrimary}" Margin="0,0,0,14" />
 
                     <!-- ── Patient Section ────────────────────────────── -->
-
-                    <!-- Tab switcher: PureChart | Manual -->
-                    <Grid Margin="0,0,0,8">
-                        <Grid.Style>
-                            <Style TargetType="Grid">
-                                <Setter Property="Visibility" Value="Visible" />
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsPatientSet}" Value="True">
-                                        <Setter Property="Visibility" Value="Collapsed" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Grid.Style>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="4" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <!-- PureChart tab -->
-                        <Button Grid.Column="0" Cursor="Hand"
-                                Command="{Binding ToggleManualEntryCommand}"
-                                CommandParameter="purechart">
-                            <Button.Template>
-                                <ControlTemplate TargetType="Button">
-                                    <Border x:Name="tabBorder" CornerRadius="6" Padding="6,5">
-                                        <Border.Style>
-                                            <Style TargetType="Border">
-                                                <Setter Property="Background" Value="{DynamicResource TabActiveBg}" />
-                                                <Setter Property="BorderBrush" Value="{DynamicResource TabActiveBorder}" />
-                                                <Setter Property="BorderThickness" Value="0,0,0,2" />
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsManualEntryMode}" Value="True">
-                                                        <Setter Property="Background" Value="{DynamicResource TabInactiveBg}" />
-                                                        <Setter Property="BorderBrush" Value="Transparent" />
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </Border.Style>
-                                        <TextBlock Text="PureChart" FontSize="11" FontWeight="SemiBold"
-                                                   HorizontalAlignment="Center" Foreground="{DynamicResource DentalAccent}" />
-                                    </Border>
-                                </ControlTemplate>
-                            </Button.Template>
-                        </Button>
-                        <!-- Manual tab -->
-                        <Button Grid.Column="2" Cursor="Hand"
-                                Command="{Binding ToggleManualEntryCommand}"
-                                CommandParameter="manual">
-                            <Button.Template>
-                                <ControlTemplate TargetType="Button">
-                                    <Border x:Name="tabBorder" CornerRadius="6" Padding="6,5">
-                                        <Border.Style>
-                                            <Style TargetType="Border">
-                                                <Setter Property="Background" Value="{DynamicResource TabInactiveBg}" />
-                                                <Setter Property="BorderBrush" Value="Transparent" />
-                                                <Setter Property="BorderThickness" Value="0,0,0,2" />
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsManualEntryMode}" Value="True">
-                                                        <Setter Property="Background" Value="{DynamicResource TabActiveBg}" />
-                                                        <Setter Property="BorderBrush" Value="{DynamicResource Accent400}" />
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </Border.Style>
-                                        <TextBlock Text="Manual" FontSize="11" FontWeight="SemiBold"
-                                                   HorizontalAlignment="Center" Foreground="{DynamicResource Accent400}" />
-                                    </Border>
-                                </ControlTemplate>
-                            </Button.Template>
-                        </Button>
-                    </Grid>
-
-                    <!-- ══ Tab 1: PureChart patient list (default) ══ -->
+                    <!-- PureChart patient list (auto-hidden if API fails or patient set) -->
                     <Border MaxHeight="220" Margin="0,0,0,6">
                         <Border.Style>
                             <Style TargetType="Border">
@@ -1221,7 +1149,7 @@
                         </ScrollViewer>
                     </Border>
 
-                    <!-- ══ Tab 2: Manual entry form ══ -->
+                    <!-- ══ Manual entry fallback (shown when PureChart API fails) ══ -->
                     <StackPanel>
                         <StackPanel.Style>
                             <Style TargetType="StackPanel">
