@@ -59,14 +59,14 @@ public sealed class PureChartService : IPureChartService, IDisposable
         {
             patients.Add(new PureChartPatient
             {
-                Id = el.GetPropertyOrDefault("id"),
-                FirstName = el.GetPropertyOrDefault("first_name"),
-                LastName = el.GetPropertyOrDefault("last_name"),
-                MedicalRecordNumber = el.GetPropertyOrDefault("medical_record_number"),
-                Dob = el.GetPropertyOrDefault("dob"),
-                Phone = el.GetPropertyOrDefault("phone"),
-                Email = el.GetPropertyOrDefault("email"),
-                ProfilePictureUrl = el.GetPropertyOrDefault("profile_picture_url"),
+                Id = el.GetStringOrDefault("id"),
+                FirstName = el.GetStringOrDefault("first_name"),
+                LastName = el.GetStringOrDefault("last_name"),
+                MedicalRecordNumber = el.GetStringOrDefault("medical_record_number"),
+                Dob = el.GetStringOrDefault("dob"),
+                Phone = el.GetStringOrDefault("phone"),
+                Email = el.GetStringOrDefault("email"),
+                ProfilePictureUrl = el.GetStringOrDefault("profile_picture_url"),
             });
         }
 
@@ -95,16 +95,15 @@ public sealed class PureChartService : IPureChartService, IDisposable
         {
             using var doc = JsonDocument.Parse(json);
             var r = doc.RootElement;
-            result.Success = r.GetPropertyOrDefault("success") == "True"
-                             || r.GetPropertyOrDefault("success") == "true";
-            result.FileUrl = r.GetPropertyOrDefault("fileUrl");
-            result.AttachmentId = r.GetPropertyOrDefault("attachmentId");
-            result.PatientId = r.GetPropertyOrDefault("patientId");
-            result.Filename = r.GetPropertyOrDefault("filename");
-            result.UploadType = r.GetPropertyOrDefault("type");
-            result.Error = r.GetPropertyOrDefault("error");
+            result.Success = r.GetBoolOrDefault("success");
+            result.FileUrl = r.GetStringOrDefault("fileUrl");
+            result.AttachmentId = r.GetStringOrDefault("attachmentId");
+            result.PatientId = r.GetStringOrDefault("patientId");
+            result.Filename = r.GetStringOrDefault("filename");
+            result.UploadType = r.GetStringOrDefault("type");
+            result.Error = r.GetStringOrDefault("error");
             if (string.IsNullOrEmpty(result.Error))
-                result.Error = r.GetPropertyOrDefault("message");
+                result.Error = r.GetStringOrDefault("message");
         }
 
         if (!response.IsSuccessStatusCode)
@@ -137,12 +136,34 @@ public sealed class PureChartService : IPureChartService, IDisposable
 }
 
 /// <summary>
-/// Helper extension for safe JSON property access.
+/// Helper extensions for safe JSON property access — handles mixed types
+/// (the upload-xray edge function returns "success" as a JSON boolean,
+/// while string fields like "fileUrl" are strings).
 /// </summary>
 internal static class JsonElementExtensions
 {
-    public static string GetPropertyOrDefault(this JsonElement el, string name, string fallback = "")
+    public static string GetStringOrDefault(this JsonElement el, string name, string fallback = "")
     {
-        return el.TryGetProperty(name, out var prop) ? prop.GetString() ?? fallback : fallback;
+        if (!el.TryGetProperty(name, out var prop)) return fallback;
+        return prop.ValueKind switch
+        {
+            JsonValueKind.String => prop.GetString() ?? fallback,
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            JsonValueKind.Number => prop.GetRawText(),
+            _ => fallback,
+        };
+    }
+
+    public static bool GetBoolOrDefault(this JsonElement el, string name, bool fallback = false)
+    {
+        if (!el.TryGetProperty(name, out var prop)) return fallback;
+        return prop.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.String => bool.TryParse(prop.GetString(), out var b) && b,
+            _ => fallback,
+        };
     }
 }

@@ -38,6 +38,10 @@ public partial class ImageEditWindow : Window
 
     private void OnSliderChanged(object sender, RoutedEventArgs e)
     {
+        // Guard: sliders fire ValueChanged during InitializeComponent() before
+        // _source and XAML elements are assigned — ignore those early calls.
+        if (!IsLoaded) return;
+
         // Update value labels
         ExposureLabel.Text = $"{ExposureSlider.Value:F0}";
         ContrastLabel.Text = $"{ContrastSlider.Value / 100.0:F2}";
