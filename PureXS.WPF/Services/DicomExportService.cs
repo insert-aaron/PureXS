@@ -72,6 +72,16 @@ public class DicomExportService : IDicomExportService
             };
             dataset.Add(DicomTag.ViewPosition, viewPosition);
 
+            // Ceph-specific metadata (from Sidexis reference DICOM)
+            if (isCeph)
+            {
+                dataset.Add(DicomTag.PixelSpacing, 0.094549m, 0.094549m);
+                dataset.Add(DicomTag.ImagerPixelSpacing, 0.104004m, 0.104004m);
+                dataset.Add(DicomTag.DetectorType, "SCINTILLATOR");
+                dataset.Add(DicomTag.PatientOrientation, "A", "F");
+                dataset.Add(DicomTag.PresentationIntentType, "FOR PRESENTATION");
+            }
+
             // --- Pixel Data ---
             dataset.Add(DicomTag.Rows, (ushort)height);
             dataset.Add(DicomTag.Columns, (ushort)width);
