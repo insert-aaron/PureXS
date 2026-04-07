@@ -33,7 +33,7 @@ public sealed class ImageProcessingService : IImageProcessingService
     }
 
     /// <inheritdoc />
-    public async Task<byte[]?> ProcessRawScanAsync(byte[] rawBytes, CancellationToken ct = default)
+    public async Task<byte[]?> ProcessRawScanAsync(byte[] rawBytes, string examType = "Panoramic", CancellationToken ct = default)
     {
         if (_pythonPath is null)
         {
@@ -59,7 +59,7 @@ public sealed class ImageProcessingService : IImageProcessingService
             var psi = new ProcessStartInfo
             {
                 FileName = _pythonPath,
-                Arguments = $"\"{_decoderScript}\" --input \"{rawPath}\" --output \"{outPath}\"",
+                Arguments = $"\"{_decoderScript}\" --input \"{rawPath}\" --output \"{outPath}\" --exam-type \"{examType}\"",
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,

@@ -48,8 +48,9 @@ public class DicomExportService : IDicomExportService
             dataset.Add(DicomTag.StudyID, "1");
 
             // --- Series Module ---
+            var isCeph = examType.StartsWith("Ceph", StringComparison.OrdinalIgnoreCase);
             var seriesInstanceUid = DicomUIDGenerator.GenerateDerivedFromUUID();
-            dataset.Add(DicomTag.Modality, "PX");
+            dataset.Add(DicomTag.Modality, isCeph ? "DX" : "PX");
             dataset.Add(DicomTag.SeriesInstanceUID, seriesInstanceUid);
             dataset.Add(DicomTag.SeriesNumber, 1);
             dataset.Add(DicomTag.SeriesDescription, examType);
@@ -62,7 +63,14 @@ public class DicomExportService : IDicomExportService
             dataset.Add(DicomTag.Manufacturer, "Dentsply Sirona");
             dataset.Add(DicomTag.ManufacturerModelName, "Orthophos XG");
             dataset.Add(DicomTag.SoftwareVersions, "PureXS 1.0");
-            dataset.Add(DicomTag.BodyPartExamined, "JAW");
+            dataset.Add(DicomTag.BodyPartExamined, isCeph ? "SKULL" : "JAW");
+            var viewPosition = examType switch
+            {
+                "Ceph Lateral" => "LAT",
+                "Ceph Frontal" => "AP",
+                _ => "PA"
+            };
+            dataset.Add(DicomTag.ViewPosition, viewPosition);
 
             // --- Pixel Data ---
             dataset.Add(DicomTag.Rows, (ushort)height);

@@ -46,7 +46,7 @@ public interface ISironaService : IAsyncDisposable
     /// After this call, the device waits for the physical expose button.
     /// The ExposeStarted event fires when the button is pressed.
     /// </summary>
-    Task ArmForExposeAsync(string lastName = "test", string firstName = "test", CancellationToken ct = default);
+    Task ArmForExposeAsync(string lastName = "test", string firstName = "test", string examType = "Panoramic", CancellationToken ct = default);
 }
 
 /// <summary>

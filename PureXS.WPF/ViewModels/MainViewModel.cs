@@ -431,7 +431,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             _log.Log($"Arming device for patient {PtId}, exam={exam}");
 
             // Arm the device — sends CAPS_REQ + patient DATA_SEND
-            await _sirona.ArmForExposeAsync(PtLastName, PtFirstName);
+            await _sirona.ArmForExposeAsync(PtLastName, PtFirstName, SelectedExamType);
 
             // Device is now armed — update UI
             MachineStatus = "ARMED — press R, then press EXPOSE button on unit";
@@ -1206,7 +1206,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             IsScanInProgress = false;
             MachineStatus = "Processing image...";
             MachineIndicator = new SolidColorBrush(Color.FromRgb(255, 167, 38)); // orange
-            PhaseLabel = "Phase 3: processing — reconstructing panoramic";
+            PhaseLabel = $"Phase 3: processing — reconstructing {SelectedExamType}";
             PhaseLabelColor = new SolidColorBrush(Color.FromRgb(79, 195, 247));
             IsExposing = false;
         });
@@ -1214,11 +1214,11 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         _log.Log($"Image received, {rawBytes.Length} raw bytes, elapsed={exposeElapsed:F1}s, processing...");
         _toast.Show("Processing scan image...", "info", 2000);
 
-        // Run the decoder — produces a finished panoramic PNG
+        // Run the decoder — produces a finished PNG (panoramic or ceph)
         byte[]? processedBytes = null;
         try
         {
-            processedBytes = await _imageProcessor.ProcessRawScanAsync(rawBytes);
+            processedBytes = await _imageProcessor.ProcessRawScanAsync(rawBytes, SelectedExamType);
         }
         catch (Exception ex)
         {

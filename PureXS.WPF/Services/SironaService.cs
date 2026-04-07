@@ -368,7 +368,7 @@ public sealed class SironaService : ISironaService
     }
 
     /// <inheritdoc />
-    public async Task ArmForExposeAsync(string lastName = "test", string firstName = "test", CancellationToken ct = default)
+    public async Task ArmForExposeAsync(string lastName = "test", string firstName = "test", string examType = "Panoramic", CancellationToken ct = default)
     {
         if (_state != ConnectionState.Connected)
             throw new InvalidOperationException($"Cannot arm in state {_state}.");
@@ -404,17 +404,21 @@ public sealed class SironaService : ISironaService
         }
 
         // 3. DATA_SEND (patient payload) + continuation
+        var program = ExamTypeToProgram.GetValueOrDefault(examType, 0x01);
+        var continuation = BuildDataContinuation(program);
+        Debug.WriteLine($"[Sirona] Exam type: {examType} → program=0x{program:X2}");
+
         var payload = DataSendTemplate; // 156-byte known-good payload
-        var totalLen = (ushort)(payload.Length + DataContinuation.Length);
+        var totalLen = (ushort)(payload.Length + continuation.Length);
         var header = BuildSessionHeader(FC_DATA_SEND, payloadLength: totalLen);
-        var frame = new byte[header.Length + payload.Length + DataContinuation.Length];
+        var frame = new byte[header.Length + payload.Length + continuation.Length];
         header.CopyTo(frame, 0);
         payload.CopyTo(frame, header.Length);
-        DataContinuation.CopyTo(frame, header.Length + payload.Length);
+        continuation.CopyTo(frame, header.Length + payload.Length);
 
         await _stream.WriteAsync(frame, ct);
         await _stream.FlushAsync(ct);
-        Debug.WriteLine($"[Sirona] DATA_SEND: {payload.Length}B payload + {DataContinuation.Length}B continuation");
+        Debug.WriteLine($"[Sirona] DATA_SEND: {payload.Length}B payload + {continuation.Length}B continuation (program=0x{program:X2})");
 
         // 4. Wait for DATA_ACK (0x1001)
         try
@@ -470,10 +474,20 @@ public sealed class SironaService : ISironaService
     ];
 
     /// <summary>
-    /// Continuation data sent immediately after DATA_SEND payload.
-    /// Contains program parameters (panoramic mode, etc.).
+    /// Maps user-facing exam type strings to DX81RecordingMode program codes.
     /// </summary>
-    private static readonly byte[] DataContinuation = [
+    private static readonly Dictionary<string, ushort> ExamTypeToProgram = new()
+    {
+        ["Panoramic"]    = 0x01,
+        ["Ceph Lateral"] = 0x02,
+        ["Ceph Frontal"] = 0x03,
+    };
+
+    /// <summary>
+    /// Base continuation data sent immediately after DATA_SEND payload (98 bytes).
+    /// Byte 58-59 = DX81RecordingMode (big-endian uint16) — patched per exam type.
+    /// </summary>
+    private static readonly byte[] DataContinuationBase = [
         0x00,0x01,0x00,0x01,0x00,0x00,0x00,0x00,
         0x00,0x2c,0x00,0x02,0x00,0x01,0x00,0x00,
         0x00,0x00,0x00,0x2c,0x00,0x03,0x00,0x01,
@@ -488,6 +502,20 @@ public sealed class SironaService : ISironaService
         0xff,0xff,0x00,0x00,0x00,0x00,0x00,0x05,
         0xff,0xff,0x00,0x05,0xff,0xff,
     ];
+
+    /// <summary>Offset of DX81RecordingMode in DataContinuationBase (big-endian uint16).</summary>
+    private const int RecordingModeOffset = 58;
+
+    /// <summary>
+    /// Builds the DATA_SEND continuation with the specified program code.
+    /// </summary>
+    private static byte[] BuildDataContinuation(ushort program)
+    {
+        var buf = (byte[])DataContinuationBase.Clone();
+        buf[RecordingModeOffset]     = (byte)((program >> 8) & 0xFF);
+        buf[RecordingModeOffset + 1] = (byte)(program & 0xFF);
+        return buf;
+    }
 
     // ── P2K Frame building ─────────────────────────────────────────────────
 

@@ -44,7 +44,7 @@ except ImportError:
 
 # Optional: direct TCP decoder for raw Sirona HB monitoring
 try:
-    from hb_decoder import SironaLiveClient, KVSample, Scanline, reconstruct_image
+    from hb_decoder import SironaLiveClient, KVSample, Scanline, reconstruct_image, reconstruct_ceph_image
     HAS_HB_DECODER = True
 except ImportError:
     HAS_HB_DECODER = False
@@ -111,7 +111,7 @@ EXPOSE_EVENT_LOG = _DATA_DIR / "events.log"
 PATIENTS_DIR = _DATA_DIR / "patients"
 RECENT_PATIENTS_FILE = _DATA_DIR / "recent_patients.json"
 RECENT_PATIENTS_MAX = 10
-EXAM_TYPES = ["Panoramic", "Bitewing", "Periapical"]
+EXAM_TYPES = ["Panoramic", "Ceph Lateral", "Ceph Frontal", "Periapical"]
 
 # Exposure parameter IDs (from constants.py / orthophos_xg.py)
 PARAM_KV = 0x0010
@@ -2764,6 +2764,7 @@ class PureXSApp(ctk.CTk):
                     first_name=p.get("first", "test"),
                     doctor="Dr. Demo",
                     workstation="PUREXS",
+                    exam_type=p.get("exam", "Panoramic"),
                 )
                 self.after(0, self._on_trigger_sent)
             except Exception as exc:
@@ -3127,15 +3128,27 @@ class PureXSApp(ctk.CTk):
         # Run heavy reconstruct on background thread
         scanlines = list(self._expose_scanlines)
         repair_mask = getattr(self._sirona_client, '_repair_mask', None) if self._sirona_client else None
+        exam = self._patient.get("exam", "Panoramic")
 
         def _do():
             try:
-                img = reconstruct_image(scanlines, repair_mask=repair_mask)
+                img = self._reconstruct_for_exam(scanlines, exam, repair_mask=repair_mask)
                 self.after(0, self._on_stitch_done, img, None)
             except Exception as exc:
                 self.after(0, self._on_stitch_done, None, exc)
 
         threading.Thread(target=_do, name="stitch", daemon=True).start()
+
+    @staticmethod
+    def _reconstruct_for_exam(
+        scanlines: list,
+        exam_type: str = "Panoramic",
+        repair_mask=None,
+    ) -> "Image.Image | None":
+        """Route to the correct reconstruction function based on exam type."""
+        if exam_type in ("Ceph Lateral", "Ceph Frontal"):
+            return reconstruct_ceph_image(scanlines)
+        return reconstruct_image(scanlines, repair_mask=repair_mask)
 
     def _on_stitch_done(self, img: "Image.Image | None", error: "Exception | None") -> None:
         """Callback after background reconstruct_image completes."""
@@ -3253,21 +3266,23 @@ class PureXSApp(ctk.CTk):
             self._render_current_image()
 
     def _on_save_panoramic(self) -> None:
-        """Save the stitched panoramic image."""
+        """Save the stitched image (panoramic or ceph)."""
         if not self._expose_scanlines or not HAS_HB_DECODER:
             return
 
-        img = reconstruct_image(self._expose_scanlines)
+        exam = self._patient.get("exam", "Panoramic")
+        img = self._reconstruct_for_exam(self._expose_scanlines, exam)
         if img is None:
-            Toast(self, "No panoramic to save", level="warning")
+            Toast(self, "No image to save", level="warning")
             return
 
+        exam_label = exam.lower().replace(" ", "_")
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         path = filedialog.asksaveasfilename(
             parent=self,
-            title="Save Panoramic",
+            title=f"Save {exam}",
             defaultextension=".png",
-            initialfile=f"panoramic_{ts}.png",
+            initialfile=f"{exam_label}_{ts}.png",
             filetypes=[
                 ("PNG Image", "*.png"),
                 ("TIFF Image", "*.tif"),
@@ -3418,12 +3433,13 @@ class PureXSApp(ctk.CTk):
             self._show_dicom_fallback()
 
     def _show_dicom_fallback(self) -> None:
-        """Display the stitched panoramic in a popup window as a fallback."""
+        """Display the stitched image in a popup window as a fallback."""
         if not self._expose_scanlines or not HAS_HB_DECODER:
             Toast(self, "No image data for fallback view", level="warning")
             return
 
-        img = reconstruct_image(self._expose_scanlines)
+        exam = self._patient.get("exam", "Panoramic")
+        img = self._reconstruct_for_exam(self._expose_scanlines, exam)
         if img is None:
             return
 
@@ -3731,16 +3747,18 @@ class PureXSApp(ctk.CTk):
         outdir = self._patient_output_dir()
         prefix = self._patient_file_prefix()
 
-        # 1. Save panoramic PNG
+        # 1. Save image PNG (panoramic or ceph)
+        exam = self._patient.get("exam", "Panoramic")
+        exam_label = exam.lower().replace(" ", "_")
         pano_filename = ""
         if self._expose_scanlines and HAS_HB_DECODER:
-            img = reconstruct_image(self._expose_scanlines)
+            img = self._reconstruct_for_exam(self._expose_scanlines, exam)
             if img is not None:
-                pano_filename = f"{prefix}_panoramic.png"
+                pano_filename = f"{prefix}_{exam_label}.png"
                 pano_path = outdir / pano_filename
                 img.save(pano_path)
                 self._last_pano_path = str(pano_path)  # PHASE 3
-                self._log(f"Panoramic saved: {pano_path}", "info")
+                self._log(f"{exam} saved: {pano_path}", "info")
 
         # 2. Save events log for this expose
         events_filename = f"{prefix}_events.log"
