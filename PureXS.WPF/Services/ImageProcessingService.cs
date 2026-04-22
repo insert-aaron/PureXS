@@ -116,9 +116,27 @@ public sealed class ImageProcessingService : IImageProcessingService
         }
         finally
         {
-            try { File.Delete(rawPath); } catch { }
-            try { File.Delete(outPath); } catch { }
+            TrimScanHistory(tempDir, keepMostRecent: 5);
         }
+    }
+
+    private static void TrimScanHistory(string tempDir, int keepMostRecent)
+    {
+        try
+        {
+            var bins = new DirectoryInfo(tempDir)
+                .GetFiles("scan_*.bin")
+                .OrderByDescending(f => f.LastWriteTimeUtc)
+                .Skip(keepMostRecent);
+
+            foreach (var bin in bins)
+            {
+                try { bin.Delete(); } catch { }
+                var png = Path.ChangeExtension(bin.FullName, ".png");
+                try { if (File.Exists(png)) File.Delete(png); } catch { }
+            }
+        }
+        catch { }
     }
 
     private static string appDir => AppContext.BaseDirectory;
