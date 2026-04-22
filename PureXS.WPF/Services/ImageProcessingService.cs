@@ -116,9 +116,7 @@ public sealed class ImageProcessingService : IImageProcessingService
         }
         finally
         {
-            // TEMP 2026-04-22: preserve raw .bin for pipeline debugging.
-            // Revert by uncommenting the delete once a live scan has been captured.
-            // try { File.Delete(rawPath); } catch { }
+            try { File.Delete(rawPath); } catch { }
             try { File.Delete(outPath); } catch { }
         }
     }
