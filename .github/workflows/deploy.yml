@@ -87,9 +87,17 @@ jobs:
         shell: bash
 
       # ── Deploy to PureXS-releases ─────────────────────────────────────
+      - name: Setup SSH deploy key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts
+        shell: bash
+
       - name: Clone PureXS-releases
         run: |
-          git clone https://x-access-token:${{ secrets.DEPLOY_TOKEN }}@github.com/${{ github.repository_owner }}/PureXS-releases.git releases-repo
+          git clone git@github.com:${{ github.repository_owner }}/PureXS-releases.git releases-repo
         shell: bash
 
       - name: Stage artifacts into releases repo
