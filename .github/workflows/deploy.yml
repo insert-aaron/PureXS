@@ -87,20 +87,10 @@ jobs:
         shell: bash
 
       # ── Deploy to PureXS-releases ─────────────────────────────────────
-      - name: Setup SSH key for releases repo
-        env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-        run: |
-          if [ -z "$DEPLOY_SSH_KEY" ]; then
-            echo "DEPLOY_SSH_KEY is not set"
-            exit 1
-          fi
-          mkdir -p ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
-          chmod 644 ~/.ssh/known_hosts
-        shell: bash
+      - name: Setup SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
 
       - name: Clone PureXS-releases
         run: |
