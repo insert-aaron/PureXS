@@ -57,6 +57,7 @@ public sealed class SironaService : ISironaService
     private readonly int _maxReconnectAttempts;
     private readonly TimeSpan _reconnectDelay;
     private readonly IConfigService? _config;
+    private readonly IEventLogService? _log;
 
     // ── State ───────────────────────────────────────────────────────────────
     private TcpClient? _tcp;
@@ -110,7 +111,8 @@ public sealed class SironaService : ISironaService
         int port = 12837,
         int maxReconnectAttempts = 5,
         TimeSpan? reconnectDelay = null,
-        IConfigService? config = null)
+        IConfigService? config = null,
+        IEventLogService? log = null)
     {
         _host = host;
         _port = port;
@@ -119,6 +121,7 @@ public sealed class SironaService : ISironaService
         _maxReconnectAttempts = maxReconnectAttempts;
         _reconnectDelay = reconnectDelay ?? TimeSpan.FromSeconds(2);
         _config = config;
+        _log = log;
     }
 
     // ── Public API ──────────────────────────────────────────────────────────
@@ -670,7 +673,7 @@ public sealed class SironaService : ISironaService
                     {
                         // Idle timeout — no data for 2s, scan stream has ended
                         Debug.WriteLine($"[Sirona] Scan stream idle timeout ({ScanIdleTimeoutMs}ms) — completing exposure with {_session.ImageBuffer.Count} bytes");
-                        CompleteExposure();
+                        CompleteExposure("idle-timeout-2s");
                         return;
                     }
                 }
@@ -685,7 +688,7 @@ public sealed class SironaService : ISironaService
                     if (_session.IsExposing)
                     {
                         Debug.WriteLine($"[Sirona] Connection closed during exposure — completing with {_session.ImageBuffer.Count} bytes");
-                        CompleteExposure();
+                        CompleteExposure("connection-closed");
                         return;
                     }
                     break;
@@ -702,7 +705,7 @@ public sealed class SironaService : ISironaService
                     if (_session.IsExposing)
                     {
                         Debug.WriteLine($"[Sirona] PostScanDisconnect marker found — completing exposure with {_session.ImageBuffer.Count} bytes");
-                        CompleteExposure();
+                        CompleteExposure("post-scan-marker");
                     }
                     else
                     {
@@ -756,7 +759,7 @@ public sealed class SironaService : ISironaService
             if (_session.IsExposing && _session.ImageBuffer.Count > 0)
             {
                 Debug.WriteLine($"[Sirona] Reader error during exposure — completing with {_session.ImageBuffer.Count} bytes");
-                CompleteExposure();
+                CompleteExposure($"reader-error: {ex.Message}");
                 return;
             }
 
@@ -770,7 +773,7 @@ public sealed class SironaService : ISironaService
     /// Matches the Python flow where _recv_scan_data ends on socket timeout,
     /// then events are fired and reconnect happens.
     /// </summary>
-    private void CompleteExposure()
+    private void CompleteExposure(string reason)
     {
         _session.IsExposing = false;
         _session.IsPostScanDisconnect = true;
@@ -781,7 +784,13 @@ public sealed class SironaService : ISironaService
         catch { /* best effort */ }
 
         var imageBytes = _session.ImageBuffer.ToArray();
-        Debug.WriteLine($"[Sirona] CompleteExposure — {imageBytes.Length} bytes, firing ImageReceived");
+        Debug.WriteLine($"[Sirona] CompleteExposure ({reason}) — {imageBytes.Length} bytes, firing ImageReceived");
+        // Mirror to the file log so post-mortem of bad scans doesn't require a
+        // debugger or DebugView. The reason string identifies which of the five
+        // CompleteExposure paths fired (idle-timeout-2s, post-scan-marker,
+        // connection-closed, reader-error, hard-watchdog-90s).
+        var level = reason.StartsWith("reader-error") || reason == "hard-watchdog-90s" ? "warning" : "info";
+        _log?.Log($"Exposure ended: {reason} ({imageBytes.Length} raw bytes)", level);
 
         if (imageBytes.Length > 0)
             ImageReceived?.Invoke(this, imageBytes);
@@ -803,7 +812,7 @@ public sealed class SironaService : ISironaService
             if (_session.IsExposing)
             {
                 Debug.WriteLine($"[Sirona] Hard exposure timeout ({ExposeHardTimeoutMs}ms) — force-completing with {_session.ImageBuffer.Count} bytes");
-                CompleteExposure();
+                CompleteExposure("hard-watchdog-90s");
             }
         }
         catch (OperationCanceledException) { /* Normal — exposure completed before timeout */ }

@@ -71,12 +71,12 @@ public partial class App : Application
                 }
             }
 
-            ISironaService sirona = new SironaService(host, port, config: config);
+            IEventLogService log = new EventLogService();
+            ISironaService sirona = new SironaService(host, port, config: config, log: log);
             IPureChartService pureChart = new PureChartService(facilityToken);
             IImageProcessingService imageProcessor = new ImageProcessingService();
             IPatientOutputService patientOutput = new PatientOutputService();
             IToastService toast = new ToastService();
-            IEventLogService log = new EventLogService();
             IDicomExportService dicom = new DicomExportService();
             var viewModel = new MainViewModel(sirona, pureChart, imageProcessor, toast, log, patientOutput, dicom);
             var window = new MainWindow(viewModel);
