@@ -77,6 +77,66 @@ jobs:
           if exist sgf_frame_gain.npy copy sgf_frame_gain.npy publish\x86\decoder\
         shell: cmd
 
+      # ── Bundle embedded Python interpreter + decoder deps (x64 only) ──
+      # Ships a self-contained Python interpreter inside the release so
+      # facilities don't need internet access, admin rights, or working
+      # AV/firewall config to install Python at first run. Replaces the
+      # runtime-download path in SetupAndRun.bat which was failing
+      # silently in the field (see purexs_2026-04-25.log, 2026-05-04.log).
+      # x86 is not bundled — opencv-python no longer ships 32-bit wheels.
+      - name: Bundle embedded Python (x64)
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pyVer     = "3.11.9"
+          $embedZip  = "$env:RUNNER_TEMP\python-embed.zip"
+          $bundleDir = "publish\x64\python"
+
+          Write-Host "Downloading Python $pyVer embed (amd64)..."
+          Invoke-WebRequest `
+            -Uri "https://www.python.org/ftp/python/$pyVer/python-$pyVer-embed-amd64.zip" `
+            -OutFile $embedZip
+
+          New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
+          Expand-Archive -Path $embedZip -DestinationPath $bundleDir -Force
+
+          Write-Host "Enabling site-packages in ._pth..."
+          Get-ChildItem -Path $bundleDir -Filter "python*._pth" | ForEach-Object {
+            (Get-Content $_.FullName) -replace '#import site','import site' |
+              Set-Content $_.FullName
+          }
+
+          Write-Host "Bootstrapping pip..."
+          $getPip = "$env:RUNNER_TEMP\get-pip.py"
+          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile $getPip
+          & "$bundleDir\python.exe" $getPip --no-warn-script-location
+
+          Write-Host "Installing decoder dependencies..."
+          & "$bundleDir\python.exe" -m pip install `
+            -r requirements-decoder.txt `
+            --no-warn-script-location `
+            --no-cache-dir
+
+          Write-Host "Verifying decoder dependencies..."
+          & "$bundleDir\python.exe" -c "import numpy, cv2, PIL, scipy, pydicom; print('OK: all decoder deps importable')"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Decoder dependency verification failed"
+          }
+
+          # Trim cache/build artifacts that aren't needed at runtime
+          Get-ChildItem -Path $bundleDir -Recurse -Directory `
+            -Include __pycache__,tests,_pytest |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          Get-ChildItem -Path $bundleDir -Recurse -Filter "*.pyc" |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+
+          Remove-Item $embedZip -Force -ErrorAction SilentlyContinue
+          Remove-Item $getPip   -Force -ErrorAction SilentlyContinue
+
+          $sizeMb = [math]::Round(
+            (Get-ChildItem -Recurse $bundleDir | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
+          Write-Host "Python bundle size: $sizeMb MB"
+        shell: pwsh
+
       # ── Write version ─────────────────────────────────────────────────
       - name: Write version.txt
         run: |

@@ -12,8 +12,10 @@ public class EventLogService : IEventLogService
 
     public EventLogService()
     {
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        LogDirectory = Path.Combine(appData, "PureXS", "logs");
+        // Single source of truth for the path lives in PureXSDataPaths.
+        // Resolves to %LOCALAPPDATA%\PureXS\logs by default, overridable
+        // via PUREXS_DATA_DIR.
+        LogDirectory = PureXSDataPaths.Logs;
         Directory.CreateDirectory(LogDirectory);
     }
 

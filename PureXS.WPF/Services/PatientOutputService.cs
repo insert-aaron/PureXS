@@ -7,9 +7,11 @@ namespace PureXS.Services;
 
 public class PatientOutputService : IPatientOutputService
 {
-    private static readonly string BaseDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "PureXS", "patients");
+    // Was %APPDATA%\Roaming\PureXS\patients — moved into the consolidated
+    // layout under %LOCALAPPDATA%\PureXS\patients so big patient .bin
+    // files don't sync to a domain server with the roaming profile, and
+    // so all PureXS data sits under one root.
+    private static readonly string BaseDir = PureXSDataPaths.Patients;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {

@@ -1423,9 +1423,13 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         {
             var patientName = $"{patient.LastName}^{patient.FirstName}";
             var patientDob = ParseDobToDicom(patient.Dob);
-            var outputDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-                "PureXS", "DICOM");
+            // Was %USERPROFILE%\Documents\PureXS\DICOM — moved into the
+            // consolidated layout under %LOCALAPPDATA%\PureXS\DICOM. If
+            // operators or Sidexis import workflows rely on the old
+            // path, set PUREXS_DATA_DIR to a custom root and create a
+            // symlink/junction at the old location, or revert this one
+            // line if cross-app DICOM handoff is the norm at the site.
+            var outputDir = PureXS.Services.PureXSDataPaths.Dicom;
             var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
             var prefix = $"{patient.LastName}_{patient.FirstName}_{timestamp}";
 

@@ -58,7 +58,11 @@ public sealed class ImageProcessingService : IImageProcessingService
             return null;
         }
 
-        var tempDir = Path.Combine(Path.GetTempPath(), "PureXS");
+        // Was %TEMP%\PureXS — moved into the consolidated layout under
+        // %LOCALAPPDATA%\PureXS\temp so all PureXS files live in one
+        // root. Same scratch semantics: TrimScanHistory keeps only the
+        // last 5 .bin/.png pairs.
+        var tempDir = PureXSDataPaths.Temp;
         Directory.CreateDirectory(tempDir);
         var rawPath = Path.Combine(tempDir, $"scan_{DateTime.Now:yyyyMMdd_HHmmss}.bin");
         var outPath = Path.ChangeExtension(rawPath, ".png");

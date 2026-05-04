@@ -72,6 +72,13 @@ public partial class App : Application
             }
 
             IEventLogService log = new EventLogService();
+
+            // One-time relocation of pre-consolidation data into the
+            // unified %LOCALAPPDATA%\PureXS\ layout (or PUREXS_DATA_DIR
+            // override). Marker file inside Root prevents re-execution
+            // on every launch; failures are logged but never fatal.
+            PureXSDataMigration.RunOnce(log);
+
             ISironaService sirona = new SironaService(host, port, config: config, log: log);
             IPureChartService pureChart = new PureChartService(facilityToken);
             IImageProcessingService imageProcessor = new ImageProcessingService(log: log);
