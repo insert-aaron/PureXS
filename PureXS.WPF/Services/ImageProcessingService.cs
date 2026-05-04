@@ -24,12 +24,14 @@ public sealed class ImageProcessingService : IImageProcessingService
 {
     private readonly string _decoderScript;
     private readonly string? _pythonPath;
+    private readonly IEventLogService? _log;
 
-    public ImageProcessingService()
+    public ImageProcessingService(IEventLogService? log = null)
     {
         var appDir = AppContext.BaseDirectory;
         _decoderScript = Path.Combine(appDir, "decoder", "purexs_decoder_cli.py");
         _pythonPath = ResolvePython(appDir);
+        _log = log;
     }
 
     /// <inheritdoc />
@@ -37,13 +39,22 @@ public sealed class ImageProcessingService : IImageProcessingService
     {
         if (_pythonPath is null)
         {
-            Debug.WriteLine("[ImageProcessing] No Python found — decoder unavailable");
+            const string msg = "Decoder unavailable: Python interpreter not found. " +
+                               "Run SetupAndRun.bat from the install directory to install " +
+                               "the embedded Python and decoder dependencies. The image will " +
+                               "fall back to a low-resolution scanline preview.";
+            Debug.WriteLine($"[ImageProcessing] {msg}");
+            _log?.Log(msg, "warning");
             return null;
         }
 
         if (!File.Exists(_decoderScript))
         {
-            Debug.WriteLine($"[ImageProcessing] Decoder script not found at {_decoderScript}");
+            var msg = $"Decoder script missing at {_decoderScript}. " +
+                      "The decoder/ folder appears to be missing from the install — " +
+                      "redeploy or rerun SetupAndRun.bat. Falling back to scanline preview.";
+            Debug.WriteLine($"[ImageProcessing] {msg}");
+            _log?.Log(msg, "error");
             return null;
         }
 
@@ -70,7 +81,11 @@ public sealed class ImageProcessingService : IImageProcessingService
             using var proc = Process.Start(psi);
             if (proc is null)
             {
-                Debug.WriteLine("[ImageProcessing] Failed to start Python process");
+                var msg = $"Failed to start Python process at {_pythonPath}. " +
+                          "Check that the interpreter has execute permission and " +
+                          "isn't blocked by antivirus. Falling back to scanline preview.";
+                Debug.WriteLine($"[ImageProcessing] {msg}");
+                _log?.Log(msg, "error");
                 return null;
             }
 
@@ -88,7 +103,10 @@ public sealed class ImageProcessingService : IImageProcessingService
             catch (OperationCanceledException)
             {
                 proc.Kill(entireProcessTree: true);
-                Debug.WriteLine("[ImageProcessing] Decoder timed out after 60s");
+                const string msg = "Decoder timed out after 60s and was killed. " +
+                                   "Falling back to scanline preview.";
+                Debug.WriteLine($"[ImageProcessing] {msg}");
+                _log?.Log(msg, "warning");
                 return null;
             }
 
@@ -102,13 +120,24 @@ public sealed class ImageProcessingService : IImageProcessingService
 
             if (proc.ExitCode != 0)
             {
-                Debug.WriteLine($"[ImageProcessing] Decoder exited with code {proc.ExitCode}");
+                // Tail of stderr usually contains the Python traceback's last
+                // line, which is the most useful single fact about why decode
+                // failed (missing module, bad bytes, etc.).
+                var tail = (stderrText ?? string.Empty).TrimEnd();
+                if (tail.Length > 240) tail = "..." + tail[^240..];
+                var msg = $"Decoder exited with code {proc.ExitCode}. " +
+                          $"Falling back to scanline preview. stderr tail: {tail}";
+                Debug.WriteLine($"[ImageProcessing] {msg}");
+                _log?.Log(msg, "warning");
                 return null;
             }
 
             if (!File.Exists(outPath))
             {
-                Debug.WriteLine("[ImageProcessing] Decoder produced no output file");
+                const string msg = "Decoder finished cleanly but produced no PNG. " +
+                                   "Falling back to scanline preview.";
+                Debug.WriteLine($"[ImageProcessing] {msg}");
+                _log?.Log(msg, "warning");
                 return null;
             }
 

@@ -74,7 +74,7 @@ public partial class App : Application
             IEventLogService log = new EventLogService();
             ISironaService sirona = new SironaService(host, port, config: config, log: log);
             IPureChartService pureChart = new PureChartService(facilityToken);
-            IImageProcessingService imageProcessor = new ImageProcessingService();
+            IImageProcessingService imageProcessor = new ImageProcessingService(log: log);
             IPatientOutputService patientOutput = new PatientOutputService();
             IToastService toast = new ToastService();
             IDicomExportService dicom = new DicomExportService();
