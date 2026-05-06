@@ -81,11 +81,11 @@ public partial class App : Application
 
             ISironaService sirona = new SironaService(host, port, config: config, log: log);
             IPureChartService pureChart = new PureChartService(facilityToken);
-            IImageProcessingService imageProcessor = new ImageProcessingService(log: log);
+            IImageProcessingService imageProcessor = new ImageProcessingService(log: log, config: config);
             IPatientOutputService patientOutput = new PatientOutputService();
             IToastService toast = new ToastService();
             IDicomExportService dicom = new DicomExportService();
-            var viewModel = new MainViewModel(sirona, pureChart, imageProcessor, toast, log, patientOutput, dicom);
+            var viewModel = new MainViewModel(sirona, pureChart, imageProcessor, toast, log, patientOutput, dicom, config);
             var window = new MainWindow(viewModel);
 
             MainWindow = window;

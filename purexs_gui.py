@@ -626,6 +626,10 @@ class PureXSApp(ctk.CTk):
         self._purechart_patients: list = []       # List[PureChartPatient]
         self._selected_purechart: object = None   # currently selected PureChartPatient
         self._facility_token: str = self._load_facility_token()
+        # When True, _save_patient_outputs writes an uncompressed TIF copy
+        # next to the panoramic PNG. Off by default to avoid ~3 MB/scan
+        # disk cost; only on for facilities running Sidexis LUT calibration.
+        self._save_tif_export: bool = self._load_save_tif_export()
         self._purechart_loader: object = None
         self._purechart_uploader: object = None   # PHASE 3
         self._last_pano_path: str = ""            # PHASE 3 — path to last saved panoramic PNG
@@ -722,6 +726,23 @@ class PureXSApp(ctk.CTk):
                 pass
         cfg["facility_token"] = token
         cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+    def _load_save_tif_export(self) -> bool:
+        """Load the save_tif_export flag from config.json (default False).
+
+        When True, _save_patient_outputs additionally writes an
+        uncompressed 8-bit TIFF next to each panoramic PNG. Used only by
+        facilities calibrating a per-device Sidexis tone LUT — non-
+        calibrating facilities save ~3 MB per scan by leaving it off.
+        """
+        cfg_path = self._get_config_path()
+        if cfg_path.exists():
+            try:
+                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                return bool(cfg.get("save_tif_export", False))
+            except Exception:
+                pass
+        return False
 
     # ╔════════════════════════════════════════════════════════════════════════
     # ║  UI Construction
@@ -3759,6 +3780,18 @@ class PureXSApp(ctk.CTk):
                 img.save(pano_path)
                 self._last_pano_path = str(pano_path)  # PHASE 3
                 self._log(f"{exam} saved: {pano_path}", "info")
+
+                # Optional TIF copy alongside the PNG. Driven by the
+                # save_tif_export config flag — used by facilities running
+                # Sidexis LUT calibration. Pixels are byte-identical to
+                # the PNG; the TIF is uncompressed (~3 MB per scan).
+                if self._save_tif_export:
+                    try:
+                        tif_path = pano_path.with_suffix(".tif")
+                        img.save(tif_path, format="TIFF", compression="none")
+                        self._log(f"TIF saved: {tif_path}", "info")
+                    except Exception as exc:
+                        self._log(f"TIF save failed: {exc}", "warning")
 
         # 2. Save events log for this expose
         events_filename = f"{prefix}_events.log"

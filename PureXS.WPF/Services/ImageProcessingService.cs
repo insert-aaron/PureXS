@@ -25,17 +25,19 @@ public sealed class ImageProcessingService : IImageProcessingService
     private readonly string _decoderScript;
     private readonly string? _pythonPath;
     private readonly IEventLogService? _log;
+    private readonly IConfigService? _config;
 
-    public ImageProcessingService(IEventLogService? log = null)
+    public ImageProcessingService(IEventLogService? log = null, IConfigService? config = null)
     {
         var appDir = AppContext.BaseDirectory;
         _decoderScript = Path.Combine(appDir, "decoder", "purexs_decoder_cli.py");
         _pythonPath = ResolvePython(appDir);
         _log = log;
+        _config = config;
     }
 
     /// <inheritdoc />
-    public async Task<byte[]?> ProcessRawScanAsync(byte[] rawBytes, string examType = "Panoramic", CancellationToken ct = default)
+    public async Task<ProcessedScan?> ProcessRawScanAsync(byte[] rawBytes, string examType = "Panoramic", CancellationToken ct = default)
     {
         if (_pythonPath is null)
         {
@@ -66,6 +68,12 @@ public sealed class ImageProcessingService : IImageProcessingService
         Directory.CreateDirectory(tempDir);
         var rawPath = Path.Combine(tempDir, $"scan_{DateTime.Now:yyyyMMdd_HHmmss}.bin");
         var outPath = Path.ChangeExtension(rawPath, ".png");
+        var tifPath = Path.ChangeExtension(rawPath, ".tif");
+
+        // Decoder writes a parallel TIFF only when the facility opted in
+        // via config flag — the file is ~5× the PNG, so off by default.
+        var saveTif = _config?.SaveTifExport ?? false;
+        var tifFlag = saveTif ? " --save-tif" : string.Empty;
 
         try
         {
@@ -74,7 +82,7 @@ public sealed class ImageProcessingService : IImageProcessingService
             var psi = new ProcessStartInfo
             {
                 FileName = _pythonPath,
-                Arguments = $"\"{_decoderScript}\" --input \"{rawPath}\" --output \"{outPath}\" --exam-type \"{examType}\"",
+                Arguments = $"\"{_decoderScript}\" --input \"{rawPath}\" --output \"{outPath}\" --exam-type \"{examType}\"{tifFlag}",
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
@@ -145,7 +153,24 @@ public sealed class ImageProcessingService : IImageProcessingService
                 return null;
             }
 
-            return await File.ReadAllBytesAsync(outPath, ct);
+            var pngBytes = await File.ReadAllBytesAsync(outPath, ct);
+
+            // Only report a TIF source path if the flag was set AND the
+            // decoder actually produced the file — guards against silent
+            // pillow/format failures inside the subprocess.
+            string? tifSource = null;
+            if (saveTif && File.Exists(tifPath))
+            {
+                tifSource = tifPath;
+            }
+            else if (saveTif)
+            {
+                _log?.Log(
+                    $"TIF export requested but decoder produced no TIF at {tifPath}",
+                    "warning");
+            }
+
+            return new ProcessedScan(pngBytes, tifSource);
         }
         finally
         {
@@ -167,6 +192,8 @@ public sealed class ImageProcessingService : IImageProcessingService
                 try { bin.Delete(); } catch { }
                 var png = Path.ChangeExtension(bin.FullName, ".png");
                 try { if (File.Exists(png)) File.Delete(png); } catch { }
+                var tif = Path.ChangeExtension(bin.FullName, ".tif");
+                try { if (File.Exists(tif)) File.Delete(tif); } catch { }
             }
         }
         catch { }

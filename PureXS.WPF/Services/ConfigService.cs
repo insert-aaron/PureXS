@@ -11,6 +11,7 @@ public class ConfigService : IConfigService
     private string? _facilityToken;
     private string? _sironaHost;
     private int? _sironaPort;
+    private bool _saveTifExport;
 
     public ConfigService()
     {
@@ -29,6 +30,8 @@ public class ConfigService : IConfigService
     public string? SironaHost => _sironaHost;
 
     public int? SironaPort => _sironaPort;
+
+    public bool SaveTifExport => _saveTifExport;
 
     public void SaveFacilityToken(string token)
     {
@@ -89,6 +92,9 @@ public class ConfigService : IConfigService
             var portNode = root?["sirona_port"];
             if (portNode is not null)
                 _sironaPort = portNode.GetValue<int>();
+            var tifNode = root?["save_tif_export"];
+            if (tifNode is not null)
+                _saveTifExport = tifNode.GetValue<bool>();
         }
         catch
         {

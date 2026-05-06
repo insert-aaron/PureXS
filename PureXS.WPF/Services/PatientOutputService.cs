@@ -53,6 +53,33 @@ public class PatientOutputService : IPatientOutputService
         return filePath;
     }
 
+    public async Task<string> SavePanoramicTifAsync(
+        string patientDir, string filePrefix, string sourceTifPath, CancellationToken ct = default)
+    {
+        var filename = $"{filePrefix}_panoramic.tif";
+        var filePath = Path.Combine(patientDir, filename);
+
+        await FileLock.WaitAsync(ct);
+        try
+        {
+            // Async copy via stream so a large uncompressed TIF (~3 MB)
+            // doesn't block the UI thread. File.Copy is synchronous.
+            await using var src = new FileStream(
+                sourceTifPath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                bufferSize: 81920, useAsync: true);
+            await using var dst = new FileStream(
+                filePath, FileMode.Create, FileAccess.Write, FileShare.None,
+                bufferSize: 81920, useAsync: true);
+            await src.CopyToAsync(dst, ct);
+        }
+        finally
+        {
+            FileLock.Release();
+        }
+
+        return filePath;
+    }
+
     public async Task SaveEventsLogAsync(string patientDir, string filePrefix, string examType, int scanlines, double peakKv, double elapsed, CancellationToken ct = default)
     {
         var filename = $"{filePrefix}_events.log";

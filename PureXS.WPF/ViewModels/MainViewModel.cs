@@ -23,6 +23,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
     private readonly IEventLogService _log;
     private readonly IPatientOutputService _patientOutput;
     private readonly IDicomExportService _dicom;
+    private readonly IConfigService? _config;
 
     // ── Machine state ────────────────────────────────────────────────────
     [ObservableProperty]
@@ -161,6 +162,11 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private byte[]? _lastImageBytes;
 
+    // Path of an uncompressed TIF copy of the last scan, in the decoder's
+    // temp dir. Set only when SaveTifExport config is on. SavePatientOutputAsync
+    // copies it next to the panoramic PNG and clears the field.
+    private string? _lastTifSourcePath;
+
     // ── DICOM export state ──────────────────────────────────────────────
     [ObservableProperty]
     private string? _lastDcmPath;
@@ -254,7 +260,8 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         IToastService toast,
         IEventLogService log,
         IPatientOutputService patientOutput,
-        IDicomExportService dicom)
+        IDicomExportService dicom,
+        IConfigService? config = null)
     {
         _sirona = sirona;
         _pureChart = pureChart;
@@ -263,6 +270,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         _log = log;
         _patientOutput = patientOutput;
         _dicom = dicom;
+        _config = config;
 
         _toast.ToastRequested += OnToastRequested;
         _sirona.ConnectionStateChanged += OnConnectionStateChanged;
@@ -1214,11 +1222,18 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         _log.Log($"Image received, {rawBytes.Length} raw bytes, {_scanlines.Count} live scanlines, elapsed={exposeElapsed:F1}s, processing...");
         _toast.Show("Processing scan image...", "info", 2000);
 
-        // Run the Python decoder — produces a finished PNG (panoramic or ceph)
+        // Run the Python decoder — produces a finished PNG (panoramic or ceph),
+        // and optionally an uncompressed TIF copy when SaveTifExport is on.
         byte[]? processedBytes = null;
+        _lastTifSourcePath = null;
         try
         {
-            processedBytes = await _imageProcessor.ProcessRawScanAsync(rawBytes, SelectedExamType);
+            var processed = await _imageProcessor.ProcessRawScanAsync(rawBytes, SelectedExamType);
+            if (processed is not null)
+            {
+                processedBytes = processed.PngBytes;
+                _lastTifSourcePath = processed.TifSourcePath;
+            }
         }
         catch (Exception ex)
         {
@@ -1393,7 +1408,29 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             {
                 panoFile = await _patientOutput.SavePanoramicAsync(patientDir, filePrefix, _lastImageBytes);
                 _log.Log($"Panoramic saved: {panoFile}");
+
+                // Optional TIF copy alongside the PNG. Driven by the
+                // SaveTifExport config flag — used by facilities running
+                // Sidexis LUT calibration. The decoder's temp TIF gets
+                // copied into the patient dir; the temp file is rotated
+                // out by TrimScanHistory after a few scans.
+                if ((_config?.SaveTifExport ?? false)
+                    && !string.IsNullOrEmpty(_lastTifSourcePath)
+                    && File.Exists(_lastTifSourcePath))
+                {
+                    try
+                    {
+                        var tifFile = await _patientOutput.SavePanoramicTifAsync(
+                            patientDir, filePrefix, _lastTifSourcePath);
+                        _log.Log($"TIF saved: {tifFile}");
+                    }
+                    catch (Exception tifEx)
+                    {
+                        _log.Log($"TIF copy failed: {tifEx.Message}", "warning");
+                    }
+                }
             }
+            _lastTifSourcePath = null;
 
             // 2. Save events log
             await _patientOutput.SaveEventsLogAsync(
