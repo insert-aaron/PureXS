@@ -29,9 +29,9 @@
         <Style x:Key="ExposeButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="{DynamicResource DangerBg}" />
             <Setter Property="Foreground" Value="White" />
-            <Setter Property="FontSize" Value="28" />
+            <Setter Property="FontSize" Value="15" />
             <Setter Property="FontWeight" Value="Bold" />
-            <Setter Property="Padding" Value="40,20" />
+            <Setter Property="Padding" Value="20,10" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Template">
                 <Setter.Value>
@@ -1465,8 +1465,8 @@
                             Style="{StaticResource ExposeButtonStyle}"
                             HorizontalAlignment="Stretch">
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                            <TextBlock Text="&#x2622; " FontSize="28" VerticalAlignment="Center" />
-                            <TextBlock Text="EXPOSE" FontSize="28" FontWeight="Bold" VerticalAlignment="Center" />
+                            <TextBlock Text="&#x2622; " FontSize="15" VerticalAlignment="Center" />
+                            <TextBlock Text="Start Scan" FontSize="15" FontWeight="Bold" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
 

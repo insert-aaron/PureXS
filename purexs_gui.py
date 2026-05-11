@@ -1092,10 +1092,10 @@ class PureXSApp(ctk.CTk):
 
         self._expose_btn = ctk.CTkButton(
             expose_frame,
-            text="\u2622  EXPOSE",
-            font=ctk.CTkFont(family="Segoe UI", size=24, weight="bold"),
-            height=72,
-            corner_radius=12,
+            text="\u2622  Start Scan",
+            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
+            height=44,
+            corner_radius=10,
             fg_color="#B71C1C",
             hover_color="#D32F2F",
             text_color="#FFFFFF",
