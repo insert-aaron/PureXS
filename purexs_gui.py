@@ -778,25 +778,6 @@ class PureXSApp(ctk.CTk):
         )
         self._hb_monitor_btn.pack(side="left", padx=(16, 4))
 
-        # ── Direct TCP EXPOSE button ─────────────────────────────────────────
-        self._direct_expose_btn = ctk.CTkButton(
-            toolbar,
-            text="\u2622 EXPOSE",
-            width=120,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            command=self._on_direct_expose,
-            fg_color="#616161",
-            hover_color="#757575",
-            text_color="#9E9E9E",
-            state="disabled",
-        )
-        self._direct_expose_btn.pack(side="left", padx=4)
-        _EXPOSE_TOOLTIP = (
-            "Requires: Patient set + HB pulse\n"
-            "Press R on unit keypad to position gantry first."
-        )
-        _ToolTip(self._direct_expose_btn, _EXPOSE_TOOLTIP)
-
         # ── History button ───────────────────────────────────────────────────
         self._history_btn = ctk.CTkButton(
             toolbar,
@@ -2758,11 +2739,6 @@ class PureXSApp(ctk.CTk):
         self._got_kv_or_scanline = False
 
         # Update UI
-        self._direct_expose_btn.configure(
-            state="disabled",
-            fg_color="#5D4037",
-            text="\u2622 EXPOSING...",
-        )
         self._set_status("\u2622 EXPOSING \u2014 kV ramping", "#FF6F00",
                          phase="Phase 1: pre-exposure \u2014 kV ramp")
         self._progress.start()
@@ -2891,7 +2867,6 @@ class PureXSApp(ctk.CTk):
         # Update UI
         self._progress.stop()
         self._progress.set(0)
-        self._direct_expose_btn.configure(text="\u2622 EXPOSE")
         self._update_expose_eligibility()
         self._set_status(
             f"\u2713 Scan complete | {sl_count} lines — Please be patient after pressing EXPOSE; processing may take a moment.",
@@ -2974,7 +2949,6 @@ class PureXSApp(ctk.CTk):
 
         self._progress.stop()
         self._progress.set(0)
-        self._direct_expose_btn.configure(text="\u2622 EXPOSE")
         self._update_expose_eligibility()
         self._set_status("ERROR", "#F44336")
         self._log(f"Expose send failed: {exc}", "error")
@@ -3635,17 +3609,6 @@ class PureXSApp(ctk.CTk):
         """Enable/disable expose buttons based on HB + patient + device readiness."""
         patient_set = self._patient.get("set", False)
         hb_active = self._direct_connected
-
-        # Direct expose button: needs HB active + patient + device READY
-        if patient_set and hb_active and self._device_ready:
-            self._direct_expose_btn.configure(
-                state="normal", fg_color="#FF3B30",
-                hover_color="#FF6659", text_color="#FFFFFF",
-            )
-        else:
-            self._direct_expose_btn.configure(
-                state="disabled", fg_color="#616161", text_color="#9E9E9E",
-            )
 
         # API expose button: needs API connection + patient + last status READY
         api_ready = self._last_status in ("READY", "CONNECTED")

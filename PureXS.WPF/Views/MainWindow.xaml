@@ -256,40 +256,6 @@
             </Setter>
         </Style>
 
-        <!-- Red expose toolbar button -->
-        <Style x:Key="ExposeToolbarButtonStyle" TargetType="Button">
-            <Setter Property="Foreground" Value="White" />
-            <Setter Property="FontSize" Value="13" />
-            <Setter Property="FontWeight" Value="Bold" />
-            <Setter Property="Padding" Value="16,8" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="border"
-                                Background="{DynamicResource DangerBg}"
-                                CornerRadius="8"
-                                Padding="{TemplateBinding Padding}"
-                                BorderBrush="{DynamicResource DangerBorder}"
-                                BorderThickness="1">
-                            <ContentPresenter HorizontalAlignment="Center"
-                                              VerticalAlignment="Center" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="{DynamicResource DangerHover}" />
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="border" Property="Background" Value="{DynamicResource DisabledBg}" />
-                                <Setter TargetName="border" Property="BorderBrush" Value="{DynamicResource DisabledBorder}" />
-                                <Setter Property="Foreground" Value="{DynamicResource DisabledText}" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
         <!-- Heartbeat pulse animation -->
         <Storyboard x:Key="PulseAnimation">
             <DoubleAnimation Storyboard.TargetName="HeartbeatDot"
@@ -322,8 +288,8 @@
                     <ColumnDefinition Width="14" />
                     <ColumnDefinition Width="Auto" />  <!-- Connect -->
                     <ColumnDefinition Width="10" />
-                    <ColumnDefinition Width="Auto" />  <!-- Expose -->
-                    <ColumnDefinition Width="10" />
+                    <ColumnDefinition Width="0" />
+                    <ColumnDefinition Width="0" />
                     <ColumnDefinition Width="Auto" />  <!-- History -->
                     <ColumnDefinition Width="*" />      <!-- spacer -->
                     <ColumnDefinition Width="Auto" />  <!-- API status -->
@@ -348,17 +314,6 @@
                         IsEnabled="{Binding IsConnectEnabled}"
                         Style="{StaticResource PurpleButtonStyle}"
                         VerticalAlignment="Center" />
-
-                <!-- Expose (toolbar size) -->
-                <Button Grid.Column="4"
-                        Command="{Binding ExposeCommand}"
-                        Style="{StaticResource ExposeToolbarButtonStyle}"
-                        VerticalAlignment="Center">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="&#x2622; " FontSize="13" />
-                        <TextBlock Text="EXPOSE" FontSize="13" FontWeight="Bold" />
-                    </StackPanel>
-                </Button>
 
                 <!-- History -->
                 <Button Grid.Column="6"
