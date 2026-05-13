@@ -137,6 +137,20 @@ public sealed class ImageProcessingService : IImageProcessingService
                 // failed (missing module, bad bytes, etc.).
                 var tail = (stderrText ?? string.Empty).TrimEnd();
                 if (tail.Length > 240) tail = "..." + tail[^240..];
+
+                // Exit code 2 means the decoder refused to reconstruct because
+                // the scan was truncated (device aborted mid-sweep). Surface a
+                // retake prompt instead of the generic decoder-failed warning,
+                // and skip the scanline-preview fallback — the same shortfall
+                // that breaks reconstruction breaks the preview too.
+                if (proc.ExitCode == 2)
+                {
+                    var retake = ExtractIncompleteScanMessage(stderrText)
+                                 ?? "Scan incomplete — please retake.";
+                    _log?.Log($"Decoder refused: {retake}", "warning");
+                    throw new ScanIncompleteException(retake);
+                }
+
                 var msg = $"Decoder exited with code {proc.ExitCode}. " +
                           $"Falling back to scanline preview. stderr tail: {tail}";
                 Debug.WriteLine($"[ImageProcessing] {msg}");
@@ -176,6 +190,25 @@ public sealed class ImageProcessingService : IImageProcessingService
         {
             TrimScanHistory(tempDir, keepMostRecent: 5);
         }
+    }
+
+    /// <summary>
+    /// Parses the operator-facing retake message out of the decoder's stderr
+    /// when it exited with EXIT_INCOMPLETE_SCAN (2). The CLI emits a line
+    /// like "ERROR INCOMPLETE_SCAN: Scan incomplete — N scanlines received,
+    /// expected ~2700. ...". Returns null if the marker isn't found, leaving
+    /// the caller to use a generic fallback message.
+    /// </summary>
+    private static string? ExtractIncompleteScanMessage(string? stderr)
+    {
+        if (string.IsNullOrEmpty(stderr)) return null;
+        const string marker = "INCOMPLETE_SCAN:";
+        var idx = stderr.IndexOf(marker, StringComparison.Ordinal);
+        if (idx < 0) return null;
+        var tail = stderr[(idx + marker.Length)..].TrimStart();
+        var newline = tail.IndexOfAny(new[] { '\r', '\n' });
+        if (newline >= 0) tail = tail[..newline];
+        return string.IsNullOrWhiteSpace(tail) ? null : tail.Trim();
     }
 
     private static void TrimScanHistory(string tempDir, int keepMostRecent)

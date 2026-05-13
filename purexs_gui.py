@@ -44,7 +44,11 @@ except ImportError:
 
 # Optional: direct TCP decoder for raw Sirona HB monitoring
 try:
-    from hb_decoder import SironaLiveClient, KVSample, Scanline, reconstruct_image, reconstruct_ceph_image
+    from hb_decoder import (
+        SironaLiveClient, KVSample, Scanline,
+        reconstruct_image, reconstruct_ceph_image,
+        check_scan_completeness,
+    )
     HAS_HB_DECODER = True
 except ImportError:
     HAS_HB_DECODER = False
@@ -3101,6 +3105,29 @@ class PureXSApp(ctk.CTk):
         if not HAS_HB_DECODER or not self._expose_scanlines:
             return
 
+        # Refuse to reconstruct truncated scans. The device occasionally
+        # aborts mid-sweep (interlock, X-ray fault, network drop) and only
+        # delivers a fraction of the expected columns. Reconstructing that
+        # produces a misleading stretched fragment; surface a clear retake
+        # prompt instead.
+        exam = self._patient.get("exam", "Panoramic")
+        ok, retake_msg = check_scan_completeness(self._expose_scanlines, exam)
+        if not ok:
+            self._log(retake_msg, "warning")
+            self._canvas.delete("all")
+            cw = self._canvas.winfo_width()
+            ch = self._canvas.winfo_height()
+            if cw < 10:
+                cw, ch = 800, 500
+            self._canvas.create_text(
+                cw // 2, ch // 2,
+                text=retake_msg,
+                fill="#FFA726", font=("Helvetica", 14), justify="center",
+                width=cw - 40,
+            )
+            Toast(self, retake_msg, level="warning")
+            return
+
         # Show loading state on canvas
         self._canvas.delete("all")
         cw = self._canvas.winfo_width()
@@ -3123,7 +3150,6 @@ class PureXSApp(ctk.CTk):
         # Run heavy reconstruct on background thread
         scanlines = list(self._expose_scanlines)
         repair_mask = getattr(self._sirona_client, '_repair_mask', None) if self._sirona_client else None
-        exam = self._patient.get("exam", "Panoramic")
 
         def _do():
             try:

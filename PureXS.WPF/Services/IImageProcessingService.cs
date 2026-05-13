@@ -8,6 +8,19 @@ namespace PureXS.Services;
 public sealed record ProcessedScan(byte[] PngBytes, string? TifSourcePath);
 
 /// <summary>
+/// Thrown when the decoder reports that the scan completed transport but
+/// delivered too few scanlines for a valid reconstruction (e.g. the Sirona
+/// unit aborted mid-sweep). The caller should surface <see cref="Message"/>
+/// to the operator as a retake prompt rather than falling through to the
+/// scanline-preview fallback — that fallback would also be useless on a
+/// truncated capture, and showing it has been mistaken for a real image.
+/// </summary>
+public sealed class ScanIncompleteException : Exception
+{
+    public ScanIncompleteException(string message) : base(message) { }
+}
+
+/// <summary>
 /// Processes raw Orthophos scan bytes into a finished PNG
 /// by calling the Python-based decoder (bundled as purexs_decoder.exe).
 /// </summary>

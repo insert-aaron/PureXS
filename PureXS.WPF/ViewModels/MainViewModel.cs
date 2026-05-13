@@ -1226,6 +1226,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         // and optionally an uncompressed TIF copy when SaveTifExport is on.
         byte[]? processedBytes = null;
         _lastTifSourcePath = null;
+        string? incompleteScanMessage = null;
         try
         {
             var processed = await _imageProcessor.ProcessRawScanAsync(rawBytes, SelectedExamType);
@@ -1234,6 +1235,15 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                 processedBytes = processed.PngBytes;
                 _lastTifSourcePath = processed.TifSourcePath;
             }
+        }
+        catch (ScanIncompleteException ex)
+        {
+            // Decoder refused because the scan was truncated. Skip the scanline
+            // fallback — a truncated capture produces a useless preview too,
+            // and showing it has been mistaken for a real image. Surface a
+            // clear retake prompt instead.
+            incompleteScanMessage = ex.Message;
+            Debug.WriteLine($"[MainVM] Scan incomplete: {ex.Message}");
         }
         catch (Exception ex)
         {
@@ -1245,7 +1255,9 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         // This mirrors the Python flow: _extract_panoramic → reconstruct_image
         // We already have scanlines from ParseLiveScanlines() during Phase 2
         BitmapSource? fallbackBitmap = null;
-        if (processedBytes is null && _scanlines.Count > 0)
+        if (processedBytes is null
+            && incompleteScanMessage is null
+            && _scanlines.Count > 0)
         {
             _log.Log($"Python decoder unavailable — building image from {_scanlines.Count} live scanlines");
             _toast.Show($"Building image from {_scanlines.Count} scanlines...", "info", 2000);
@@ -1309,6 +1321,19 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                     ExposeCount++;
                     _toast.Show("Scan complete — ready for review", "success", 3000);
                     _log.Log($"Image displayed, {_lastImageBytes?.Length ?? 0} bytes, decoder={decoderUsed}");
+                }
+                else if (incompleteScanMessage is not null)
+                {
+                    // Device aborted mid-sweep. Save raw bytes so a developer
+                    // can diagnose the truncation, but tell the operator to
+                    // retake — do NOT pretend a fragment is a real image.
+                    _lastImageBytes = rawBytes;
+                    MachineStatus = "Scan incomplete — please retake";
+                    MachineIndicator = new SolidColorBrush(Color.FromRgb(255, 167, 38));
+                    PhaseLabel = "";
+                    IsExposing = false;
+                    _toast.Show(incompleteScanMessage, "warning", 8000);
+                    _log.Log($"Scan incomplete: {incompleteScanMessage}. Raw bytes saved ({rawBytes.Length})", "warning");
                 }
                 else
                 {
