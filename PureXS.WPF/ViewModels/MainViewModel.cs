@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
+using System.Net.Http;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -32,11 +34,21 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ExposeCommand))]
+    [NotifyPropertyChangedFor(nameof(ExposeButtonText))]
     private bool _isConnected;
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ExposeCommand))]
     private bool _isExposing;
+
+    // True from the moment the operator clicks Start Scan until the scan
+    // completes / resets — i.e. arming + armed (waiting for physical EXPOSE
+    // button). Flips the button to "In Session" and disables it, removing the
+    // "click it again" / double-arm confusion.
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(ExposeCommand))]
+    [NotifyPropertyChangedFor(nameof(ExposeButtonText))]
+    private bool _isArmed;
 
     [ObservableProperty]
     private bool _heartbeatPulse;
@@ -100,6 +112,8 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     // ── Scan progress state ─────────────────────────────────────────────
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(ExposeCommand))]
+    [NotifyPropertyChangedFor(nameof(ExposeButtonText))]
     private bool _isScanInProgress;
 
     [ObservableProperty]
@@ -140,6 +154,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
     [NotifyCanExecuteChangedFor(nameof(ConfirmImageCommand))]
     [NotifyCanExecuteChangedFor(nameof(RetakeCommand))]
     [NotifyCanExecuteChangedFor(nameof(ExposeCommand))]
+    [NotifyPropertyChangedFor(nameof(ExposeButtonText))]
     private bool _isReviewingImage;
 
     [ObservableProperty]
@@ -247,6 +262,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private CancellationTokenSource? _searchDebounce;
     private bool _isSearching;
+    private bool _tokenRepromptDone;   // auto-prompt for a new token at most once/session
 
     // ── Toast state ─────────────────────────────────────────────────────
     public ObservableCollection<ToastItem> ActiveToasts { get; } = [];
@@ -432,6 +448,10 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             ScanlineCount = 0;
             ScanlinePreviewImage = null;
 
+            // Hide the Start Scan button immediately — from here the operator's
+            // next action is the physical EXPOSE button, not this one.
+            IsArmed = true;
+
             MachineStatus = "Arming device...";
             MachineIndicator = new SolidColorBrush(Color.FromRgb(255, 111, 0)); // orange
             PhaseLabel = "Phase 1: pre-exposure — arming device";
@@ -452,6 +472,8 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         }
         catch (Exception ex)
         {
+            // Arm failed — restore the Start Scan button so the operator can retry.
+            IsArmed = false;
             MachineStatus = $"Arm failed — {ex.Message}";
             MachineIndicator = Brushes.Red;
             IsScanInProgress = false;
@@ -460,7 +482,20 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    private bool CanExpose() => IsConnected && !IsExposing && !IsReviewingImage && (IsPatientSet || SelectedPatient is not null);
+    // True only in the Ready state: connected, not already arming/armed, not
+    // exposing/processing, not reviewing. Once the operator clicks Start Scan
+    // this goes false for the whole cycle — the button stays in place but turns
+    // into a passive "In Session" status and can't be clicked.
+    public bool IsExposeReady => IsConnected && !IsArmed && !IsScanInProgress && !IsReviewingImage;
+
+    // Button label reflects the cycle: a call-to-action when Ready, otherwise
+    // "In Session" so it reads as state rather than a clickable action and is
+    // never confused with the physical EXPOSE button on the unit.
+    public string ExposeButtonText => IsExposeReady ? "☢  Start Scan" : "In Session";
+
+    // Enabled only when Ready AND a patient is set — so an operator with no
+    // patient still sees the (disabled) button as a prompt rather than nothing.
+    private bool CanExpose() => IsExposeReady && (IsPatientSet || SelectedPatient is not null);
 
     // ── Image review + upload ────────────────────────────────────────────
 
@@ -904,12 +939,19 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         if (_isSearching) return;
         _isSearching = true;
 
-        PureChartStatus = $"Searching \"{query}\"...";
+        var isTodayLoad = string.IsNullOrWhiteSpace(query);
+        PureChartStatus = isTodayLoad
+            ? "Loading today's patients..."
+            : $"Searching \"{query}\"...";
         PureChartStatusColor = new SolidColorBrush(Color.FromRgb(255, 167, 38));
 
         try
         {
-            var patients = await _pureChart.SearchAsync(query, ct);
+            // Empty query → today's scheduled patients (the avatar-dock default);
+            // a typed query → patient search.
+            var patients = isTodayLoad
+                ? await _pureChart.ScheduledTodayAsync(null, ct)
+                : await _pureChart.SearchAsync(query, ct);
 
             PureChartResults.Clear();
             foreach (var p in patients)
@@ -918,7 +960,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             _ = LoadProfileImagesAsync(patients, ct);
 
             PureChartStatus = patients.Count == 0
-                ? "0 patients found"
+                ? (isTodayLoad ? "No patients scheduled today — type to search" : "0 patients found")
                 : $"{patients.Count} patients";
             PureChartStatusColor = patients.Count > 0
                 ? new SolidColorBrush(Color.FromRgb(129, 199, 132))
@@ -926,16 +968,58 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             IsManualEntryMode = false;  // PureChart is working
         }
         catch (TaskCanceledException) { }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            // Facility token missing / invalid / disabled — auto-prompt once.
+            PureChartStatus = "Facility token invalid or disabled — re-enter it";
+            PureChartStatusColor = new SolidColorBrush(Color.FromRgb(239, 83, 80));
+            _log.Log($"PureChart auth rejected (HTTP 401): {ex.Message}", "warning");
+            _isSearching = false;  // release guard so the post-prompt retry can run
+            await HandleTokenRejectedAsync(query, ct);
+            return;
+        }
+        catch (HttpRequestException ex) when (
+            ex.StatusCode == HttpStatusCode.BadRequest && string.IsNullOrWhiteSpace(query))
+        {
+            // Backend hasn't deployed the empty-query "today's patients" route
+            // yet — degrade quietly; search-as-you-type still works.
+            PureChartResults.Clear();
+            PureChartStatus = "Type to search a patient";
+            PureChartStatusColor = new SolidColorBrush(Color.FromRgb(117, 117, 117));
+            _log.Log("PureChart today's-patients load unavailable (HTTP 400) — "
+                     + "backend route not deployed; search still works", "info");
+        }
         catch
         {
-            PureChartStatus = "PureChart unavailable";
-            PureChartStatusColor = new SolidColorBrush(Color.FromRgb(239, 83, 80));
+            PureChartStatus = "PureChart offline — app continues normally";
+            PureChartStatusColor = new SolidColorBrush(Color.FromRgb(255, 167, 38));
             IsManualEntryMode = true;  // auto-fallback to manual entry
         }
         finally
         {
             _isSearching = false;
         }
+    }
+
+    /// <summary>
+    /// A PureChart call returned 401 (invalid/disabled token). Prompt for a new
+    /// facility token at most once per session, persist it, swap it into the
+    /// service, and retry the last search. Guarded so a bad token (or a
+    /// cancelled dialog) doesn't pop the prompt on every keystroke.
+    /// </summary>
+    private async Task HandleTokenRejectedAsync(string lastQuery, CancellationToken ct)
+    {
+        if (_tokenRepromptDone) return;
+        _tokenRepromptDone = true;
+
+        var dialog = new FacilityTokenDialog();
+        if (dialog.ShowDialog() != true || string.IsNullOrWhiteSpace(dialog.Token))
+            return;
+
+        var token = dialog.Token.Trim();
+        _config?.SaveFacilityToken(token);
+        _pureChart.UpdateToken(token);
+        await RunSearchAsync(lastQuery, ct);
     }
 
     private async Task LoadInitialPatientsAsync()
@@ -995,6 +1079,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                     MachineIndicator = Brushes.Gray;
                     IsConnected = false;
                     IsExposing = false;
+                    IsArmed = false; // a dropped device is no longer armed
                     ConnectButtonText = "Connect to Device";
                     IsConnectEnabled = true;
                     HbStatusText = "HB: --";
@@ -1032,6 +1117,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                     MachineIndicator = new SolidColorBrush(Color.FromRgb(255, 167, 38));
                     IsConnected = true;
                     IsExposing = false;
+                    IsArmed = true; // keep the Start Scan button hidden while armed
                     break;
                 case ConnectionState.Exposing:
                     MachineStatus = "☢ EXPOSING — receiving scan data...";
@@ -1268,6 +1354,11 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         {
             try
             {
+                // Processing is finished — end the armed/in-flight window. Either
+                // review is about to show (IsReviewingImage hides the button) or
+                // we fall through to a retake/ready state where it should reappear.
+                IsArmed = false;
+
                 BitmapSource? displayBitmap = null;
                 var decoderUsed = false;
 

@@ -22,4 +22,24 @@ public interface IConfigService
     /// so non-calibrating facilities don't pay ~3 MB/scan disk cost.
     /// </summary>
     bool SaveTifExport { get; }
+
+    // ── Post-scan reconnect tuning (config.json) ─────────────────────────────
+    // All null when the key is absent, so the service keeps its built-in
+    // default. Lets a facility tune rescan recovery on-site without a rebuild.
+
+    /// <summary>Max reconnect attempts after a post-scan drop. Null → default (5).</summary>
+    int? ReconnectMaxAttempts { get; }
+
+    /// <summary>Delay between reconnect attempts, ms. Null → default (2000).</summary>
+    int? ReconnectDelayMs { get; }
+
+    /// <summary>Per-attempt TCP connect timeout during reconnect, ms. Null → default (3000).</summary>
+    int? ReconnectConnectTimeoutMs { get; }
+
+    /// <summary>
+    /// Heartbeat cycles to wait after a post-scan reconnect before re-enabling
+    /// arm (gate). Each cycle ≈ 900 ms. Lower = faster rescan, less settle time.
+    /// Null → default (3, ≈2.7 s).
+    /// </summary>
+    int? RearmGateCycles { get; }
 }

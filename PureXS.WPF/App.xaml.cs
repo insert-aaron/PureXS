@@ -9,14 +9,14 @@ namespace PureXS;
 
 public partial class App : Application
 {
-    public static bool IsDarkMode { get; private set; } = true;
+    public static bool IsDarkMode { get; private set; } = false;
 
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
-        // Apply dark mode brushes
-        ApplyTheme(isDark: true);
+        // Apply light mode brushes
+        ApplyTheme(isDark: false);
 
         // Catch all unhandled exceptions and show them
         AppDomain.CurrentDomain.UnhandledException += (s, args) =>

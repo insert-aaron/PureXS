@@ -12,10 +12,13 @@ namespace PureXS.Services;
 public sealed class PureChartService : IPureChartService, IDisposable
 {
     private const string SearchUrl =
-        "https://whzohbzqhqaohpohmqah.supabase.co/functions/v1/xray-patient-search";
+        "https://whzohbzqhqaohpohmqah.supabase.co/functions/v1/xray-gateway/search";
+
+    private const string ScheduledUrl =
+        "https://whzohbzqhqaohpohmqah.supabase.co/functions/v1/xray-gateway/scheduled";
 
     private const string UploadUrl =
-        "https://whzohbzqhqaohpohmqah.supabase.co/functions/v1/upload-xray";
+        "https://whzohbzqhqaohpohmqah.supabase.co/functions/v1/xray-gateway/upload";
 
     private const string AnonKey =
         "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
@@ -41,20 +44,35 @@ public sealed class PureChartService : IPureChartService, IDisposable
 
     public async Task<List<PureChartPatient>> SearchAsync(string query, CancellationToken ct = default)
     {
-        var payload = new { q = query };
-        var response = await _http.PostAsJsonAsync(SearchUrl, payload, ct);
+        var response = await _http.PostAsJsonAsync(SearchUrl, new { q = query }, ct);
         response.EnsureSuccessStatusCode();
+        return ParsePatientList(await response.Content.ReadAsStringAsync(ct));
+    }
 
-        var json = await response.Content.ReadAsStringAsync(ct);
+    public async Task<List<PureChartPatient>> ScheduledTodayAsync(string? day = null, CancellationToken ct = default)
+    {
+        // Empty body → today (facility-local); {"date":"YYYY-MM-DD"} for a specific day.
+        object payload = string.IsNullOrWhiteSpace(day) ? new { } : new { date = day };
+        var response = await _http.PostAsJsonAsync(ScheduledUrl, payload, ct);
+        response.EnsureSuccessStatusCode();
+        return ParsePatientList(await response.Content.ReadAsStringAsync(ct));
+    }
+
+    /// <summary>
+    /// Parse an edge-function response into patients. Shared by /search and
+    /// /scheduled — both return {"patients":[...]} (or a bare list).
+    /// </summary>
+    private static List<PureChartPatient> ParsePatientList(string json)
+    {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        // The edge function may return {"patients": [...]} or a bare list
         var array = root.ValueKind == JsonValueKind.Array
             ? root
             : root.TryGetProperty("patients", out var p) ? p : root;
 
         var patients = new List<PureChartPatient>();
+        if (array.ValueKind != JsonValueKind.Array) return patients;
         foreach (var el in array.EnumerateArray())
         {
             patients.Add(new PureChartPatient
@@ -130,6 +148,12 @@ public sealed class PureChartService : IPureChartService, IDisposable
         {
             return null;
         }
+    }
+
+    public void UpdateToken(string facilityToken)
+    {
+        _http.DefaultRequestHeaders.Remove("x-api-key");
+        _http.DefaultRequestHeaders.Add("x-api-key", facilityToken);
     }
 
     public void Dispose() => _http.Dispose();

@@ -41,7 +41,11 @@ public sealed class SironaService : ISironaService
     // Timing
     private const int HeartbeatIntervalMs = 900;      // matches Python hb_interval=0.9
     private const double SessionRefreshSeconds = 1.5;  // matches Python SESSION_REFRESH_S
-    private const int ReconnectHeartbeatGate = 10;
+    // Default HB cycles to wait after a post-scan reconnect before re-enabling
+    // arm. Kept short (~2.7s settle) — ArmForExposeAsync does its own
+    // SessionRefresh, so a long gate only adds dead time between rescans.
+    // Overridable via config.json "rearm_gate_cycles" (see _rearmGateCycles).
+    private const int DefaultReconnectHeartbeatGate = 3;
     private const int ScanIdleTimeoutMs = 2000;       // matches Python sock.settimeout(2.0) — end-of-stream detection
     private const int ExposeHardTimeoutMs = 90_000;    // matches Python EXPOSE_TIMEOUT_S — hard fallback
 
@@ -56,6 +60,8 @@ public sealed class SironaService : ISironaService
     private readonly int _defaultPort;
     private readonly int _maxReconnectAttempts;
     private readonly TimeSpan _reconnectDelay;
+    private readonly TimeSpan _reconnectConnectTimeout;
+    private readonly int _rearmGateCycles;
     private readonly IConfigService? _config;
     private readonly IEventLogService? _log;
 
@@ -118,10 +124,17 @@ public sealed class SironaService : ISironaService
         _port = port;
         _defaultHost = host;
         _defaultPort = port;
-        _maxReconnectAttempts = maxReconnectAttempts;
-        _reconnectDelay = reconnectDelay ?? TimeSpan.FromSeconds(2);
         _config = config;
         _log = log;
+
+        // config.json overrides win when present, else fall back to the
+        // constructor arg / built-in default — tunable on-site without a rebuild.
+        _maxReconnectAttempts = config?.ReconnectMaxAttempts ?? maxReconnectAttempts;
+        _reconnectDelay = config?.ReconnectDelayMs is int delayMs
+            ? TimeSpan.FromMilliseconds(delayMs)
+            : reconnectDelay ?? TimeSpan.FromSeconds(2);
+        _reconnectConnectTimeout = TimeSpan.FromMilliseconds(config?.ReconnectConnectTimeoutMs ?? 3000);
+        _rearmGateCycles = config?.RearmGateCycles ?? DefaultReconnectHeartbeatGate;
     }
 
     // ── Public API ──────────────────────────────────────────────────────────
@@ -602,7 +615,7 @@ public sealed class SironaService : ISironaService
                 if (_session.IsPostScanDisconnect)
                 {
                     _session.ReconnectHeartbeatCycles++;
-                    if (_session.ReconnectHeartbeatCycles >= ReconnectHeartbeatGate)
+                    if (_session.ReconnectHeartbeatCycles >= _rearmGateCycles)
                     {
                         _session.IsPostScanDisconnect = false;
                         _session.ReconnectHeartbeatCycles = 0;
@@ -838,11 +851,17 @@ public sealed class SironaService : ISironaService
             {
                 await Task.Delay(_reconnectDelay);
 
-                _tcp = new TcpClient();
-                _tcp.ReceiveTimeout = 10000;
-                _tcp.SendTimeout = 5000;
-                await _tcp.ConnectAsync(_host, _port);
-                _stream = _tcp.GetStream();
+                // Bounded connect — the Orthophos frequently stalls accepting a
+                // fresh TCP connection right after it drops its side post-scan.
+                // Without a timeout this would hang on the OS default (~20s+) and
+                // burn through every retry; TryTcpConnectAsync caps it at 3s and
+                // returns false on refuse/timeout so we back off and retry cleanly.
+                if (!await TryTcpConnectAsync(_host, _port, _reconnectConnectTimeout, CancellationToken.None))
+                {
+                    Debug.WriteLine($"[Sirona] Reconnect attempt {attempt} timed out/refused — retrying");
+                    continue;
+                }
+                _stream = _tcp!.GetStream();
 
                 // P2K handshake on reconnect (matches Python reconnect behavior)
                 await SendSessionFrameAsync(FC_SESSION_OPEN_REQ, flags: 0x000F);
@@ -868,6 +887,10 @@ public sealed class SironaService : ISironaService
             }
         }
 
+        // All retries exhausted — surface a clean Disconnected state so the
+        // ViewModel re-enables the Connect button and the operator can retry,
+        // rather than sitting silently in Reconnecting forever.
+        Debug.WriteLine($"[Sirona] Reconnect FAILED after {_maxReconnectAttempts} attempts — operator must reconnect manually");
         SetState(ConnectionState.Disconnected);
     }
 

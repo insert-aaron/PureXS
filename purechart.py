@@ -22,10 +22,13 @@ log = logging.getLogger("purexs.purechart")
 
 # ── PureChart Supabase config ────────────────────────────────────────────────
 _SEARCH_URL = (
-    "https://whzohbzqhqaohpohmqah.supabase.co/functions/v1/xray-patient-search"
+    "https://whzohbzqhqaohpohmqah.supabase.co/functions/v1/xray-gateway/search"
+)
+_SCHEDULED_URL = (
+    "https://whzohbzqhqaohpohmqah.supabase.co/functions/v1/xray-gateway/scheduled"
 )
 _UPLOAD_URL = (
-    "https://whzohbzqhqaohpohmqah.supabase.co/functions/v1/upload-xray"
+    "https://whzohbzqhqaohpohmqah.supabase.co/functions/v1/xray-gateway/upload"
 )
 _ANON_KEY = (
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
@@ -53,6 +56,28 @@ class PureChartPatient:
 
     def __str__(self) -> str:
         return self.display_name
+
+
+def _parse_patient_list(data) -> List[PureChartPatient]:
+    """Parse an edge-function response into PureChartPatient objects.
+
+    Shared by /search and /scheduled — both return the same patient shape
+    (``{"patients": [...]}`` or a bare list). Extra fields the scheduled route
+    adds (appointment_status/_time) are ignored here.
+    """
+    records = data if isinstance(data, list) else data.get("patients", [])
+    return [
+        PureChartPatient(
+            id=rec.get("id", ""),
+            first_name=rec.get("first_name", ""),
+            last_name=rec.get("last_name", ""),
+            medical_record_number=rec.get("medical_record_number", ""),
+            dob=rec.get("dob", ""),
+            phone=rec.get("phone", ""),
+            profile_picture_url=rec.get("profile_picture_url", ""),
+        )
+        for rec in records
+    ]
 
 
 class PureChartPatientLoader:
@@ -83,23 +108,22 @@ class PureChartPatientLoader:
             timeout=15,
         )
         resp.raise_for_status()
-        data = resp.json()
+        return _parse_patient_list(resp.json())
 
-        # The edge function may return {"patients": [...]} or a bare list
-        records = data if isinstance(data, list) else data.get("patients", [])
+    def scheduled_today(self, day: str | None = None) -> List[PureChartPatient]:
+        """Return patients with an appointment at this facility today (or `day`,
+        a 'YYYY-MM-DD' string). Used to seed the avatar dock on startup and
+        whenever the search box is empty.
 
-        patients: List[PureChartPatient] = []
-        for rec in records:
-            patients.append(PureChartPatient(
-                id=rec.get("id", ""),
-                first_name=rec.get("first_name", ""),
-                last_name=rec.get("last_name", ""),
-                medical_record_number=rec.get("medical_record_number", ""),
-                dob=rec.get("dob", ""),
-                phone=rec.get("phone", ""),
-                profile_picture_url=rec.get("profile_picture_url", ""),
-            ))
-        return patients
+        Raises on HTTP / network errors — caller must handle.
+        """
+        resp = self._session.post(
+            _SCHEDULED_URL,
+            json={"date": day} if day else {},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return _parse_patient_list(resp.json())
 
 
 # ── PHASE 3 — X-ray upload ──────────────────────────────────────────────────

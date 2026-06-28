@@ -12,6 +12,10 @@ public class ConfigService : IConfigService
     private string? _sironaHost;
     private int? _sironaPort;
     private bool _saveTifExport;
+    private int? _reconnectMaxAttempts;
+    private int? _reconnectDelayMs;
+    private int? _reconnectConnectTimeoutMs;
+    private int? _rearmGateCycles;
 
     public ConfigService()
     {
@@ -32,6 +36,14 @@ public class ConfigService : IConfigService
     public int? SironaPort => _sironaPort;
 
     public bool SaveTifExport => _saveTifExport;
+
+    public int? ReconnectMaxAttempts => _reconnectMaxAttempts;
+
+    public int? ReconnectDelayMs => _reconnectDelayMs;
+
+    public int? ReconnectConnectTimeoutMs => _reconnectConnectTimeoutMs;
+
+    public int? RearmGateCycles => _rearmGateCycles;
 
     public void SaveFacilityToken(string token)
     {
@@ -95,6 +107,19 @@ public class ConfigService : IConfigService
             var tifNode = root?["save_tif_export"];
             if (tifNode is not null)
                 _saveTifExport = tifNode.GetValue<bool>();
+
+            var rcMax = root?["reconnect_max_attempts"];
+            if (rcMax is not null)
+                _reconnectMaxAttempts = rcMax.GetValue<int>();
+            var rcDelay = root?["reconnect_delay_ms"];
+            if (rcDelay is not null)
+                _reconnectDelayMs = rcDelay.GetValue<int>();
+            var rcTimeout = root?["reconnect_connect_timeout_ms"];
+            if (rcTimeout is not null)
+                _reconnectConnectTimeoutMs = rcTimeout.GetValue<int>();
+            var rearmGate = root?["rearm_gate_cycles"];
+            if (rearmGate is not null)
+                _rearmGateCycles = rearmGate.GetValue<int>();
         }
         catch
         {

@@ -291,7 +291,7 @@ class Toast(ctk.CTkToplevel):
         colours = {
             "info":    ("#2196F3", "#FFFFFF"),
             "success": ("#4CAF50", "#FFFFFF"),
-            "warning": ("#FF9800", "#000000"),
+            "warning": ("#FF9800", "#FFFFFF"),
             "error":   ("#F44336", "#FFFFFF"),
         }
         bg, fg = colours.get(level, colours["info"])
@@ -338,7 +338,7 @@ class _ToolTip:
         tw.wm_geometry(f"+{x}+{y}")
         label = tk.Label(
             tw, text=self.text, justify="left",
-            background="#37474F", foreground="#ECEFF1",
+            background="#F1F5F9", foreground="#0F172A",
             relief="solid", borderwidth=1,
             font=("Consolas", 10), padx=8, pady=4,
         )
@@ -365,10 +365,10 @@ class ImageEditWindow(ctk.CTkToplevel):
 
     def __init__(self, parent: ctk.CTk, source_image: Image.Image, **kwargs):
         super().__init__(parent, **kwargs)
-        self.title("PureXS — Preview / Edit")
+        self.title("PureChart — Preview / Edit")
         self.geometry("1200x800")
         self.minsize(900, 600)
-        self.configure(fg_color="#0D1117")
+        self.configure(fg_color="#F8FAFC")
         self.transient(parent)
         self.grab_set()
 
@@ -385,13 +385,13 @@ class ImageEditWindow(ctk.CTkToplevel):
 
         # Image canvas
         self._canvas = tk.Canvas(
-            self, bg="#0A0A0A", highlightthickness=0, cursor="crosshair",
+            self, bg="#F1F5F9", highlightthickness=0, cursor="crosshair",
         )
         self._canvas.grid(row=0, column=0, sticky="nsew", padx=(8, 4), pady=8)
         self._canvas.bind("<Configure>", lambda e: self._render_preview())
 
         # ── Right sidebar ─────────────────────────────────────────────
-        sidebar = ctk.CTkFrame(self, width=280, fg_color="#111827", corner_radius=8)
+        sidebar = ctk.CTkFrame(self, width=280, fg_color="#F1F5F9", corner_radius=8)
         sidebar.grid(row=0, column=1, sticky="nsew", padx=(4, 8), pady=8)
         sidebar.grid_propagate(False)
 
@@ -418,7 +418,7 @@ class ImageEditWindow(ctk.CTkToplevel):
             frame.pack(fill="x", padx=16, pady=(4, 0))
             ctk.CTkLabel(
                 frame, text=label,
-                font=ctk.CTkFont(size=11), text_color="#90A4AE",
+                font=ctk.CTkFont(size=11), text_color="#64748B",
             ).pack(anchor="w")
             slider = ctk.CTkSlider(
                 frame, from_=lo, to=hi, variable=var,
@@ -443,7 +443,7 @@ class ImageEditWindow(ctk.CTkToplevel):
         ctk.CTkButton(
             btn_frame, text="Reset All", width=120, height=32,
             font=ctk.CTkFont(size=11),
-            fg_color="#37474F", hover_color="#455A64",
+            fg_color="#64748B", hover_color="#475569",
             command=self._on_reset,
         ).pack(fill="x", pady=(0, 6))
 
@@ -464,7 +464,7 @@ class ImageEditWindow(ctk.CTkToplevel):
         ctk.CTkButton(
             btn_frame, text="Cancel", width=120, height=32,
             font=ctk.CTkFont(size=11),
-            fg_color="#424242", hover_color="#616161",
+            fg_color="#64748B", hover_color="#64748B",
             command=self.destroy,
         ).pack(fill="x")
 
@@ -584,11 +584,11 @@ class PureXSApp(ctk.CTk):
         super().__init__()
 
         # ── Window setup ─────────────────────────────────────────────────────
-        self.title("PureXS — Sirona Direct Control")
+        self.title("PureChart — Sirona Direct Control")
         self.geometry("1280x820")
         self.minsize(960, 700)
 
-        ctk.set_appearance_mode("dark")
+        ctk.set_appearance_mode("light")
         ctk.set_default_color_theme("blue")
 
         # Win11 acrylic / DWM transparency (best-effort)
@@ -639,6 +639,8 @@ class PureXSApp(ctk.CTk):
         self._last_pano_path: str = ""            # PHASE 3 — path to last saved panoramic PNG
         self._last_upload_args: tuple = ()        # PHASE 5 — (patient_id, file_path, type, title)
         self._purechart_searching: bool = False   # PHASE 2 — True while bg search in flight
+        self._purechart_last_query: str = ""       # last query issued (""=today's-patients load)
+        self._token_reprompt_done: bool = False    # auto-prompt for a new token at most once/session
         self._profile_photo: ImageTk.PhotoImage | None = None  # prevent GC for profile pic
         if HAS_PURECHART and self._facility_token:
             self._purechart_loader = PureChartPatientLoader(self._facility_token)
@@ -651,6 +653,13 @@ class PureXSApp(ctk.CTk):
 
         # ── Direct expose state ──────────────────────────────────────────────
         self._exposing = False              # True while expose in flight
+        # True for the whole expose cycle — from the moment Start Scan is
+        # clicked, through arming/exposing/processing/review — until the
+        # operator returns to Ready (new patient) or the attempt fails. Drives
+        # the button's passive, disabled "In Session" state (mirrors WPF
+        # IsArmed/ExposeButtonText) so it can't be confused with the physical
+        # EXPOSE button or re-clicked mid-scan.
+        self._expose_cycle_active = False
         self._expose_timer_id: str | None = None  # after() ID for timeout
         self._expose_scanlines: list = []   # Scanline objects from current expose
         self._expose_kv_peak: float = 0.0   # peak kV seen this expose
@@ -673,7 +682,7 @@ class PureXSApp(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # ── Initial log ──────────────────────────────────────────────────────
-        self._log("PureXS GUI started", "info")
+        self._log("PureChart GUI started", "info")
         self._log(f"API: {API_BASE}", "info")
         self._log(f"Log file: {LOG_FILE}", "info")
 
@@ -731,6 +740,25 @@ class PureXSApp(ctk.CTk):
         cfg["facility_token"] = token
         cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
+    def _handle_token_rejected(self) -> None:
+        """A PureChart call returned 401 (invalid/disabled token).
+
+        Prompt for a new facility token at most once per session, rebuild the
+        loader/uploader with it, and retry the last search. Guarded so a bad
+        token (or a cancelled dialog) doesn't pop the prompt on every keystroke.
+        """
+        if self._token_reprompt_done or not HAS_PURECHART:
+            return
+        self._token_reprompt_done = True
+        token = self._prompt_facility_token()  # modal; saves to config on success
+        if not token:
+            return
+        self._facility_token = token
+        self._purechart_loader = PureChartPatientLoader(token)
+        self._purechart_uploader = PureChartUploader(token)
+        # Retry whatever we last attempted (defaults to the today's-patients load)
+        self._purechart_run_search(self._purechart_last_query or "")
+
     def _load_save_tif_export(self) -> bool:
         """Load the save_tif_export flag from config.json (default False).
 
@@ -758,13 +786,22 @@ class PureXSApp(ctk.CTk):
         toolbar.pack(fill="x", padx=0, pady=0)
         toolbar.pack_propagate(False)
 
-        # ── Logo / title ─────────────────────────────────────────────────────
-        logo_label = ctk.CTkLabel(
-            toolbar,
-            text="  PureXS",
-            font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"),
-            text_color="#4FC3F7",
-        )
+        # ── Logo ─────────────────────────────────────────────────────────────
+        logo_path = Path(__file__).resolve().parent / "assets" / "purechart_icon.png"
+        if logo_path.exists():
+            self._logo_image = ctk.CTkImage(
+                light_image=Image.open(logo_path),
+                dark_image=Image.open(logo_path),
+                size=(32, 32),
+            )
+            logo_label = ctk.CTkLabel(toolbar, image=self._logo_image, text="")
+        else:
+            logo_label = ctk.CTkLabel(
+                toolbar,
+                text="  PureChart",
+                font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"),
+                text_color="#1D4ED8",
+            )
         logo_label.pack(side="left", padx=(12, 20))
 
         # Hidden device state (no UI — direct TCP auto-connects)
@@ -788,8 +825,8 @@ class PureXSApp(ctk.CTk):
             text="\U0001F5C2 History",
             width=90,
             command=self._on_open_history,
-            fg_color="#37474F",
-            hover_color="#455A64",
+            fg_color="#64748B",
+            hover_color="#475569",
             state="normal" if HAS_HISTORY else "disabled",
         )
         self._history_btn.pack(side="left", padx=(12, 4))
@@ -799,7 +836,7 @@ class PureXSApp(ctk.CTk):
             toolbar,
             text="\u2B24",
             font=ctk.CTkFont(size=10),
-            text_color="#616161",
+            text_color="#64748B",
         )
         self._api_dot.pack(side="right", padx=(0, 12))
 
@@ -807,7 +844,7 @@ class PureXSApp(ctk.CTk):
             toolbar,
             text="API: checking...",
             font=ctk.CTkFont(size=11),
-            text_color="#9E9E9E",
+            text_color="#94A3B8",
         )
         self._api_label.pack(side="right", padx=0)
 
@@ -824,7 +861,7 @@ class PureXSApp(ctk.CTk):
         # ═══════════════════════════════════════════════════════════════════
         # PATIENT DOCK (far left — vertical scrollable avatar strip)
         # ═══════════════════════════════════════════════════════════════════
-        self._dock_frame = ctk.CTkFrame(main, corner_radius=10, fg_color="#0D1117", width=88)
+        self._dock_frame = ctk.CTkFrame(main, corner_radius=10, fg_color="#F8FAFC", width=88)
         self._dock_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4), pady=0)
         self._dock_frame.grid_propagate(False)
         self._dock_visible = True
@@ -839,10 +876,10 @@ class PureXSApp(ctk.CTk):
             width=76, height=28,
             font=ctk.CTkFont(size=10),
             corner_radius=6,
-            fg_color="#161B22",
-            border_color="#30363D",
-            text_color="#C9D1D9",
-            placeholder_text_color="#484F58",
+            fg_color="#FFFFFF",
+            border_color="#E2E8F0",
+            text_color="#0F172A",
+            placeholder_text_color="#94A3B8",
         )
         self._search_entry.pack(padx=4, pady=(6, 2))
         self._purechart_search_var.trace_add("write", self._on_purechart_search_typed)
@@ -850,13 +887,13 @@ class PureXSApp(ctk.CTk):
         # Status label (result count / loading / errors)
         self._purechart_status = ctk.CTkLabel(
             self._dock_frame, text="", font=ctk.CTkFont(size=8),
-            text_color="#757575", wraplength=76,
+            text_color="#64748B", wraplength=76,
         )
         self._purechart_status.pack(padx=4, pady=(0, 2))
 
         # Scrollable avatar column (single column, vertical)
         self._avatar_dock_frame = ctk.CTkScrollableFrame(
-            self._dock_frame, fg_color="#0D1117", corner_radius=0,
+            self._dock_frame, fg_color="#F8FAFC", corner_radius=0,
             width=76, label_text="",
         )
         self._avatar_dock_frame.pack(fill="both", expand=True, padx=2, pady=(0, 4))
@@ -872,14 +909,14 @@ class PureXSApp(ctk.CTk):
         left.rowconfigure(4, weight=1)  # log expands
 
         # ── Status section ───────────────────────────────────────────────
-        status_frame = ctk.CTkFrame(left, fg_color="#1A1A2E", corner_radius=8)
+        status_frame = ctk.CTkFrame(left, fg_color="#FFFFFF", corner_radius=8)
         status_frame.pack(fill="x", padx=8, pady=(8, 4))
 
         self._status_label = ctk.CTkLabel(
             status_frame,
             text="OFFLINE",
             font=ctk.CTkFont(size=13, weight="bold"),
-            text_color="#616161",
+            text_color="#64748B",
             wraplength=260,
         )
         self._status_label.pack(pady=(8, 2))
@@ -888,7 +925,7 @@ class PureXSApp(ctk.CTk):
             status_frame,
             text="No device connected",
             font=ctk.CTkFont(size=10),
-            text_color="#757575",
+            text_color="#64748B",
         )
         self._device_info_label.pack(pady=(0, 2))
 
@@ -904,19 +941,19 @@ class PureXSApp(ctk.CTk):
             status_frame,
             text="",
             font=ctk.CTkFont(size=9),
-            text_color="#757575",
+            text_color="#64748B",
             wraplength=260,
         )
         self._phase_label.pack(pady=(0, 6))
 
         # ── Patient panel ───────────────────────────────────────────────
-        patient_frame = ctk.CTkFrame(left, corner_radius=8, fg_color="#1B2631")
+        patient_frame = ctk.CTkFrame(left, corner_radius=8, fg_color="#FFFFFF")
         patient_frame.pack(fill="x", padx=8, pady=4)
 
         ctk.CTkLabel(
             patient_frame, text="Patient",
             font=ctk.CTkFont(size=13, weight="bold"),
-            text_color="#81D4FA",
+            text_color="#1D4ED8",
         ).pack(pady=(8, 2))
 
         # Hidden refs for compatibility
@@ -924,7 +961,7 @@ class PureXSApp(ctk.CTk):
         self._purechart_row = patient_frame  # reference for pack_configure
 
         # ── Selected patient profile card ───────────────────────────────
-        self._profile_card = ctk.CTkFrame(patient_frame, fg_color="#162029", corner_radius=8)
+        self._profile_card = ctk.CTkFrame(patient_frame, fg_color="#F8FAFC", corner_radius=8)
         self._profile_card_visible = False
 
         profile_top = ctk.CTkFrame(self._profile_card, fg_color="transparent")
@@ -932,12 +969,12 @@ class PureXSApp(ctk.CTk):
 
         self._profile_avatar_canvas = tk.Canvas(
             profile_top, width=64, height=64,
-            bg="#162029", highlightthickness=0,
+            bg="#F8FAFC", highlightthickness=0,
         )
         self._profile_avatar_canvas.pack(side="left", padx=(0, 10))
-        self._profile_avatar_canvas.create_oval(2, 2, 62, 62, fill="#37474F", outline="#546E7A", width=2)
+        self._profile_avatar_canvas.create_oval(2, 2, 62, 62, fill="#E2E8F0", outline="#CBD5E1", width=2)
         self._profile_initials = self._profile_avatar_canvas.create_text(
-            32, 32, text="?", fill="#B0BEC5",
+            32, 32, text="?", fill="#64748B",
             font=("Helvetica", 18, "bold"),
         )
         self._profile_photo = None
@@ -948,28 +985,28 @@ class PureXSApp(ctk.CTk):
         self._profile_name_label = ctk.CTkLabel(
             profile_info, text="",
             font=ctk.CTkFont(size=13, weight="bold"),
-            text_color="#E0E0E0", anchor="w",
+            text_color="#0F172A", anchor="w",
         )
         self._profile_name_label.pack(fill="x")
 
         self._profile_mrn_label = ctk.CTkLabel(
             profile_info, text="",
             font=ctk.CTkFont(size=10),
-            text_color="#90A4AE", anchor="w",
+            text_color="#64748B", anchor="w",
         )
         self._profile_mrn_label.pack(fill="x")
 
         self._profile_dob_label = ctk.CTkLabel(
             profile_info, text="",
             font=ctk.CTkFont(size=10),
-            text_color="#90A4AE", anchor="w",
+            text_color="#64748B", anchor="w",
         )
         self._profile_dob_label.pack(fill="x")
 
         self._profile_phone_label = ctk.CTkLabel(
             profile_info, text="",
             font=ctk.CTkFont(size=10),
-            text_color="#90A4AE", anchor="w",
+            text_color="#64748B", anchor="w",
         )
         self._profile_phone_label.pack(fill="x")
 
@@ -977,13 +1014,13 @@ class PureXSApp(ctk.CTk):
         self._change_patient_btn = ctk.CTkButton(
             self._profile_card, text="Change Patient",
             width=120, height=24, font=ctk.CTkFont(size=10),
-            fg_color="#37474F", hover_color="#455A64",
+            fg_color="#64748B", hover_color="#475569",
             command=self._on_change_patient,
         )
         self._change_patient_btn.pack(pady=(2, 8))
 
         # PHASE 5 — Upload status bar with progress + retry
-        upload_row = ctk.CTkFrame(patient_frame, fg_color="#162029", corner_radius=6)
+        upload_row = ctk.CTkFrame(patient_frame, fg_color="#F8FAFC", corner_radius=6)
         upload_row.pack(fill="x", padx=12, pady=(0, 4))
         self._upload_frame = upload_row
         self._upload_frame.pack_forget()  # hidden until first upload
@@ -999,7 +1036,7 @@ class PureXSApp(ctk.CTk):
 
         self._upload_status_label = ctk.CTkLabel(
             upload_bottom, text="", font=ctk.CTkFont(size=10),
-            text_color="#757575", anchor="w",
+            text_color="#64748B", anchor="w",
         )
         self._upload_status_label.pack(side="left", fill="x", expand=True)
 
@@ -1051,7 +1088,7 @@ class PureXSApp(ctk.CTk):
 
         self._pt_clear_btn = ctk.CTkButton(
             btn_row, text="\u2717 Clear", width=80, height=28,
-            fg_color="#37474F", hover_color="#455A64",
+            fg_color="#64748B", hover_color="#475569",
             command=self._on_clear_patient,
         )
         self._pt_clear_btn.pack(side="left")
@@ -1097,12 +1134,12 @@ class PureXSApp(ctk.CTk):
             expose_frame,
             text="Exposures this session: 0",
             font=ctk.CTkFont(size=11),
-            text_color="#757575",
+            text_color="#64748B",
         )
         self._expose_count_label.pack()
 
         # ── kV gauge (direct TCP expose) — hidden until expose ────────
-        self._kv_frame = ctk.CTkFrame(left, corner_radius=8, fg_color="#1A1A2E")
+        self._kv_frame = ctk.CTkFrame(left, corner_radius=8, fg_color="#FFFFFF")
         # Not packed — shown during expose
 
         kv_header = ctk.CTkFrame(self._kv_frame, fg_color="transparent")
@@ -1111,19 +1148,19 @@ class PureXSApp(ctk.CTk):
         ctk.CTkLabel(
             kv_header, text="Tube Voltage",
             font=ctk.CTkFont(size=11, weight="bold"),
-            text_color="#78909C",
+            text_color="#64748B",
         ).pack(side="left")
 
         self._kv_value_label = ctk.CTkLabel(
             kv_header, text="kV: --",
             font=ctk.CTkFont(family="Consolas", size=12, weight="bold"),
-            text_color="#546E7A",
+            text_color="#94A3B8",
         )
         self._kv_value_label.pack(side="right")
 
         self._kv_progress = ctk.CTkProgressBar(
             self._kv_frame, mode="determinate", width=280,
-            progress_color="#FF6F00", fg_color="#263238",
+            progress_color="#FF6F00", fg_color="#E2E8F0",
         )
         self._kv_progress.pack(pady=(4, 8), padx=16)
         self._kv_progress.set(0)
@@ -1143,12 +1180,12 @@ class PureXSApp(ctk.CTk):
         self._scanline_count_label = ctk.CTkLabel(
             scan_preview_header, text="0 lines",
             font=ctk.CTkFont(family="Consolas", size=10),
-            text_color="#757575",
+            text_color="#64748B",
         )
         self._scanline_count_label.pack(side="right")
 
         self._scanline_canvas = tk.Canvas(
-            self._scan_preview_frame, bg="#0A0A0A", height=200,
+            self._scan_preview_frame, bg="#F1F5F9", height=200,
             highlightthickness=0,
         )
         self._scanline_canvas.pack(fill="both", expand=True, padx=8, pady=(4, 4))
@@ -1158,7 +1195,7 @@ class PureXSApp(ctk.CTk):
             text="\U0001F4BE Save Panoramic",
             width=140, height=26,
             font=ctk.CTkFont(size=10),
-            fg_color="#37474F", hover_color="#455A64",
+            fg_color="#64748B", hover_color="#475569",
             command=self._on_save_panoramic,
             state="disabled",
         )
@@ -1184,7 +1221,7 @@ class PureXSApp(ctk.CTk):
         # ── Image canvas ─────────────────────────────────────────────────
         self._canvas = tk.Canvas(
             right,
-            bg="#0A0A0A",
+            bg="#F1F5F9",
             highlightthickness=0,
             cursor="crosshair",
         )
@@ -1217,13 +1254,13 @@ class PureXSApp(ctk.CTk):
         self._canvas_text_id = self._canvas.create_text(
             0, 0,
             text="No Image\n\nConnect a device and press EXPOSE",
-            fill="#3A3A3A",
+            fill="#CBD5E1",
             font=("Segoe UI", 16),
             justify="center",
         )
 
         # ── Post-display toolbar ─────────────────────────────────────────
-        self._toolbar_frame = ctk.CTkFrame(right, fg_color="#111827", corner_radius=8)
+        self._toolbar_frame = ctk.CTkFrame(right, fg_color="#F1F5F9", corner_radius=8)
         self._toolbar_frame.grid(row=1, column=0, sticky="ew", padx=8, pady=(2, 4))
 
         # Row 1: Image info + brightness/contrast sliders
@@ -1232,13 +1269,13 @@ class PureXSApp(ctk.CTk):
 
         self._img_info_label = ctk.CTkLabel(
             toolbar_top, text="No image",
-            font=ctk.CTkFont(size=10), text_color="#9E9E9E",
+            font=ctk.CTkFont(size=10), text_color="#94A3B8",
         )
         self._img_info_label.pack(side="left")
 
         # Contrast slider
         ctk.CTkLabel(toolbar_top, text="Contrast", font=ctk.CTkFont(size=9),
-                     text_color="#78909C").pack(side="right", padx=(8, 2))
+                     text_color="#64748B").pack(side="right", padx=(8, 2))
         self._contrast_var = tk.DoubleVar(value=1.0)
         self._contrast_slider = ctk.CTkSlider(
             toolbar_top, from_=0.3, to=3.0, variable=self._contrast_var,
@@ -1249,7 +1286,7 @@ class PureXSApp(ctk.CTk):
 
         # Brightness slider
         ctk.CTkLabel(toolbar_top, text="Brightness", font=ctk.CTkFont(size=9),
-                     text_color="#78909C").pack(side="right", padx=(8, 2))
+                     text_color="#64748B").pack(side="right", padx=(8, 2))
         self._brightness_var = tk.DoubleVar(value=0.0)
         self._brightness_slider = ctk.CTkSlider(
             toolbar_top, from_=-80, to=80, variable=self._brightness_var,
@@ -1276,7 +1313,7 @@ class PureXSApp(ctk.CTk):
         self._open_dcm_btn = ctk.CTkButton(
             toolbar_btns, text="DICOM Folder", width=100, height=28,
             font=ctk.CTkFont(size=10),
-            fg_color="#37474F", hover_color="#455A64",
+            fg_color="#64748B", hover_color="#475569",
             command=self._on_open_dicom_folder, state="disabled",
         )
         self._open_dcm_btn.pack(side="left", padx=(0, 4))
@@ -1292,7 +1329,7 @@ class PureXSApp(ctk.CTk):
         # Zoom label
         self._zoom_label = ctk.CTkLabel(
             toolbar_btns, text="100%",
-            font=ctk.CTkFont(size=10, weight="bold"), text_color="#78909C",
+            font=ctk.CTkFont(size=10, weight="bold"), text_color="#64748B",
             width=48,
         )
         self._zoom_label.pack(side="right", padx=(0, 2))
@@ -1301,7 +1338,7 @@ class PureXSApp(ctk.CTk):
         self._fit_btn = ctk.CTkButton(
             toolbar_btns, text="Fit", width=40, height=28,
             font=ctk.CTkFont(size=10),
-            fg_color="#37474F", hover_color="#455A64",
+            fg_color="#64748B", hover_color="#475569",
             command=self._on_canvas_zoom_reset, state="disabled",
         )
         self._fit_btn.pack(side="right", padx=(0, 4))
@@ -1310,7 +1347,7 @@ class PureXSApp(ctk.CTk):
         self._reset_adj_btn = ctk.CTkButton(
             toolbar_btns, text="Reset", width=60, height=28,
             font=ctk.CTkFont(size=10),
-            fg_color="#37474F", hover_color="#455A64",
+            fg_color="#64748B", hover_color="#475569",
             command=self._on_reset_adjustments, state="disabled",
         )
         self._reset_adj_btn.pack(side="right")
@@ -1326,23 +1363,23 @@ class PureXSApp(ctk.CTk):
 
     def _build_status_bar(self) -> None:
         """Bottom status bar with animated HB heart, status, and session info."""
-        bar = ctk.CTkFrame(self, height=28, corner_radius=0, fg_color="#1A1A1A")
+        bar = ctk.CTkFrame(self, height=28, corner_radius=0, fg_color="#F1F5F9")
         bar.pack(fill="x", side="bottom")
         bar.pack_propagate(False)
 
         # ── Animated heart canvas ─────────────────────────────────────────
         self._heart_canvas = tk.Canvas(
-            bar, width=20, height=20, bg="#1A1A1A",
+            bar, width=20, height=20, bg="#F1F5F9",
             highlightthickness=0, bd=0,
         )
         self._heart_canvas.pack(side="left", padx=(12, 2))
         self._heart_item = self._heart_canvas.create_polygon(
             *self._heart_polygon(10, 10, 7),
-            fill="#424242", outline="", smooth=True,
+            fill="#64748B", outline="", smooth=True,
         )
         self._heart_bright = "#F44336"    # systole colour
         self._heart_dim = "#880E4F"       # diastole colour
-        self._heart_off = "#424242"       # no-connection colour
+        self._heart_off = "#64748B"       # no-connection colour
         self._heart_pulse_id: str | None = None
 
         # Text-label fallback kept for code that still references it
@@ -1354,7 +1391,7 @@ class PureXSApp(ctk.CTk):
             bar,
             text="HB: --",
             font=ctk.CTkFont(family="Consolas", size=10),
-            text_color="#616161",
+            text_color="#64748B",
         )
         self._hb_label.pack(side="left")
 
@@ -1362,7 +1399,7 @@ class PureXSApp(ctk.CTk):
             bar,
             text="",
             font=ctk.CTkFont(family="Consolas", size=10),
-            text_color="#4FC3F7",
+            text_color="#1D4ED8",
         )
         self._patient_banner.pack(side="left", padx=(16, 0))
 
@@ -1370,7 +1407,7 @@ class PureXSApp(ctk.CTk):
             bar,
             text="",
             font=ctk.CTkFont(family="Consolas", size=10),
-            text_color="#616161",
+            text_color="#64748B",
         )
         self._session_label.pack(side="right", padx=12)
 
@@ -1605,9 +1642,9 @@ class PureXSApp(ctk.CTk):
         """
         if not HAS_REQUESTS or self.api.session is None:
             # No API server path — show as N/A, don't poll
-            self._api_dot.configure(text_color="#616161")
+            self._api_dot.configure(text_color="#64748B")
             self._api_label.configure(
-                text="API: N/A (direct TCP)", text_color="#757575"
+                text="API: N/A (direct TCP)", text_color="#64748B"
             )
             return
 
@@ -1627,12 +1664,12 @@ class PureXSApp(ctk.CTk):
             self._api_dot.configure(text_color="#4CAF50")
             self._api_label.configure(
                 text=f"API: online ({device_count} dev)",
-                text_color="#81C784",
+                text_color="#2E7D32",
             )
         else:
-            self._api_dot.configure(text_color="#424242")
+            self._api_dot.configure(text_color="#64748B")
             self._api_label.configure(
-                text="API: offline", text_color="#616161"
+                text="API: offline", text_color="#64748B"
             )
         # Re-check every 30 seconds (non-critical)
         self.after(30_000, self._check_api_health)
@@ -1748,7 +1785,7 @@ class PureXSApp(ctk.CTk):
         self._set_status(state, "#4CAF50")
         self._device_info_label.configure(
             text=f"{result.get('device_type_name', '?')}  |  {result.get('ip', '?')}:{result.get('tcp_port', 1999)}",
-            text_color="#B0BEC5",
+            text_color="#475569",
         )
 
         pass  # connect btn removed
@@ -1782,13 +1819,13 @@ class PureXSApp(ctk.CTk):
     def _on_disconnect_done(self, mac: str) -> None:
         self._connected = False
         self._mac = ""
-        self._set_status("DISCONNECTED", "#9E9E9E")
+        self._set_status("DISCONNECTED", "#94A3B8")
         self._device_info_label.configure(
-            text="No device connected", text_color="#757575"
+            text="No device connected", text_color="#64748B"
         )
         pass  # connect btn removed
         pass  # disconnect btn removed
-        self._hb_label.configure(text="HB: --", text_color="#616161")
+        self._hb_label.configure(text="HB: --", text_color="#64748B")
         self._heart_off_state()
         self._session_label.configure(text="")
         self._update_expose_eligibility()
@@ -1871,7 +1908,7 @@ class PureXSApp(ctk.CTk):
             self._pulse_heart()
             self._hb_label.configure(
                 text=f"HB: seq={seq}  {rtt_ms:.0f}ms  [{status_str}]",
-                text_color="#81C784",
+                text_color="#2E7D32",
             )
 
             if status_code == 0x0000 and self._connected:
@@ -1881,7 +1918,7 @@ class PureXSApp(ctk.CTk):
                 self._set_status("BUSY", "#FFA726",
                                  phase="Acquisition in progress")
             elif status_code == 0x0003:
-                self._set_status("WARMUP", "#FFC107",
+                self._set_status("WARMUP", "#D97706",
                                  phase="Gantry positioning \u2014 align lasers")
             elif status_code == 0x0002:
                 self._set_status("ERROR", "#F44336",
@@ -1928,7 +1965,9 @@ class PureXSApp(ctk.CTk):
             Toast(self, "Acquisition already in progress", level="warning")
             return
 
-        self._expose_btn.configure(state="disabled", fg_color="#5D4037")
+        # Enter the expose cycle — button shows "In Session" until Ready.
+        self._expose_cycle_active = True
+        self._update_expose_eligibility()
         self._progress.start()
         self._set_status("EXPOSING", "#FF6F00")
         self._log("=" * 50, "info")
@@ -2008,6 +2047,8 @@ class PureXSApp(ctk.CTk):
                 )
                 self._set_status("READY", "#4CAF50")
             else:
+                self._expose_cycle_active = False  # failed — restore Start Scan
+                self._update_expose_eligibility()
                 self._set_status("ERROR", "#F44336")
                 self._log(f"Acquire FAILED: {error}", "error")
                 Toast(self, f"Acquisition failed: {error}", level="error")
@@ -2445,7 +2486,7 @@ class PureXSApp(ctk.CTk):
         self._set_status("Connected", "#4CAF50")
         self._device_info_label.configure(
             text=f"Sirona @ {host}:{port}" if host else "Direct TCP connected",
-            text_color="#81D4FA",
+            text_color="#1D4ED8",
         )
         self._log("Direct TCP: HB monitor active (0.9s interval)", "info")
         Toast(self, "Connected", level="success", duration_ms=2000)
@@ -2464,6 +2505,7 @@ class PureXSApp(ctk.CTk):
         self._direct_connected = False
         self._device_ready = False
         self._exposing = False
+        self._expose_cycle_active = False  # disconnected — not in a cycle
         self._hb_monitor_btn.configure(
             text="Connect to Device",
             fg_color="#4A148C",
@@ -2471,10 +2513,10 @@ class PureXSApp(ctk.CTk):
             state="normal",
         )
         self._kv_progress.set(0)
-        self._kv_value_label.configure(text="kV: --", text_color="#546E7A")
+        self._kv_value_label.configure(text="kV: --", text_color="#94A3B8")
         self._heart_off_state()
-        self._hb_label.configure(text="HB: --", text_color="#616161")
-        self._set_status("OFFLINE", "#616161")
+        self._hb_label.configure(text="HB: --", text_color="#64748B")
+        self._set_status("OFFLINE", "#64748B")
         # Re-evaluate expose (HB now off → disabled)
         self._update_expose_eligibility()
         self._log("Direct TCP: HB monitor stopped", "info")
@@ -2485,7 +2527,7 @@ class PureXSApp(ctk.CTk):
         status_tag = "EXPOSING" if self._exposing else "DIRECT"
         self._hb_label.configure(
             text=f"HB: seq={seq}  {rtt_ms:.0f}ms  [{status_tag}]",
-            text_color="#F48FB1",
+            text_color="#DB2777",
         )
 
     def _on_direct_device_status(self, status_code: int) -> None:
@@ -2502,14 +2544,14 @@ class PureXSApp(ctk.CTk):
             0x0000: ("READY", "#4CAF50"),
             0x0001: ("BUSY", "#FFA726"),
             0x0002: ("ERROR", "#F44336"),
-            0x0003: ("WARMUP", "#FFC107"),
+            0x0003: ("WARMUP", "#D97706"),
         }
-        label, color = status_map.get(status_code, (f"0x{status_code:04X}", "#9E9E9E"))
+        label, color = status_map.get(status_code, (f"0x{status_code:04X}", "#94A3B8"))
 
         # Only update status label when not mid-expose (expose owns the label)
         if not self._exposing:
             if status_code == 0x0003:
-                self._set_status("WARMUP", "#FFC107",
+                self._set_status("WARMUP", "#D97706",
                                  phase="Gantry positioning \u2014 align lasers")
             elif status_code == 0x0001:
                 self._set_status("BUSY", "#FFA726",
@@ -2540,7 +2582,7 @@ class PureXSApp(ctk.CTk):
         kv_display = s.kv_raw / 10.0
         self._kv_value_label.configure(
             text=f"kV: {kv_display:.1f}",
-            text_color="#FF6F00" if self._exposing else "#81C784",
+            text_color="#FF6F00" if self._exposing else "#2E7D32",
         )
         progress = min(kv_display / KV_MAX_DISPLAY, 1.0)
         self._kv_progress.set(progress)
@@ -2565,7 +2607,7 @@ class PureXSApp(ctk.CTk):
         if self._exposing and not s.is_expose_trigger:
             self._phase_label.configure(
                 text=f"Phase 1: pre-exposure \u2014 kV ramp ({kv_display:.0f} kV)",
-                text_color="#FFD54F",
+                text_color="#F59E0B",
             )
 
         if s.is_expose_trigger and self._exposing:
@@ -2637,17 +2679,17 @@ class PureXSApp(ctk.CTk):
         elif "recording_stop" in ev_lower:
             self._phase_label.configure(
                 text="Phase 3: readout \u2014 data transfer",
-                text_color="#B0BEC5",
+                text_color="#475569",
             )
         elif "imagetransfer_start" in ev_lower:
             self._phase_label.configure(
                 text="Phase 3: image transfer in progress",
-                text_color="#B0BEC5",
+                text_color="#475569",
             )
         elif "imagetransfer_stop" in ev_lower:
             self._phase_label.configure(
                 text="Phase 3: image transfer complete",
-                text_color="#81C784",
+                text_color="#2E7D32",
             )
 
         # Detect SCAN_COMPLETE from the new _recv_scan_data path
@@ -2737,12 +2779,14 @@ class PureXSApp(ctk.CTk):
     def _start_direct_expose(self) -> None:
         """Fire the expose trigger and set up timeout watchdog."""
         self._exposing = True
+        self._expose_cycle_active = True  # button → "In Session" until Ready
         self._expose_scanlines = []
         self._expose_kv_peak = 0.0
         self._expose_start_time = time.perf_counter()
         self._got_kv_or_scanline = False
 
         # Update UI
+        self._update_expose_eligibility()  # button → "In Session" now we're armed
         self._set_status("\u2622 EXPOSING \u2014 kV ramping", "#FF6F00",
                          phase="Phase 1: pre-exposure \u2014 kV ramp")
         self._progress.start()
@@ -2877,7 +2921,7 @@ class PureXSApp(ctk.CTk):
             "#4CAF50", phase="",
         )
         self._kv_progress.set(0)
-        self._kv_value_label.configure(text="kV: 0.0", text_color="#546E7A")
+        self._kv_value_label.configure(text="kV: 0.0", text_color="#94A3B8")
 
         self._expose_count += 1
         self._expose_count_label.configure(
@@ -2944,6 +2988,7 @@ class PureXSApp(ctk.CTk):
     def _on_expose_error(self, exc: Exception) -> None:
         """Expose trigger send failed."""
         self._exposing = False
+        self._expose_cycle_active = False  # failed — restore Start Scan for retry
         if self._expose_timer_id:
             self.after_cancel(self._expose_timer_id)
             self._expose_timer_id = None
@@ -3137,12 +3182,12 @@ class PureXSApp(ctk.CTk):
         self._canvas.create_text(
             cw // 2, ch // 2 - 20,
             text="Processing X-ray...",
-            fill="#4FC3F7", font=("Helvetica", 18),
+            fill="#1D4ED8", font=("Helvetica", 18),
         )
         self._canvas.create_text(
             cw // 2, ch // 2 + 15,
             text=f"{len(self._expose_scanlines)} columns captured",
-            fill="#546E7A", font=("Helvetica", 12),
+            fill="#94A3B8", font=("Helvetica", 12),
         )
         self._progress.configure(mode="indeterminate")
         self._progress.start()
@@ -3465,7 +3510,7 @@ class PureXSApp(ctk.CTk):
             return
 
         win = ctk.CTkToplevel(self)
-        win.title("PureXS — DICOM Fallback Viewer")
+        win.title("PureChart — DICOM Fallback Viewer")
         win.geometry("800x400")
 
         # Scale image to fit
@@ -3477,7 +3522,7 @@ class PureXSApp(ctk.CTk):
         )
         photo = ImageTk.PhotoImage(display)
 
-        canvas = tk.Canvas(win, bg="#0A0A0A", highlightthickness=0)
+        canvas = tk.Canvas(win, bg="#F1F5F9", highlightthickness=0)
         canvas.pack(fill="both", expand=True)
         canvas.create_image(
             400, 200, image=photo, anchor="center"
@@ -3551,7 +3596,7 @@ class PureXSApp(ctk.CTk):
             w.configure(state="disabled")
         self._pt_set_btn.configure(state="disabled")
         self._pt_status_label.configure(
-            text=f"\u2713 {last}, {first}", text_color="#81C784"
+            text=f"\u2713 {last}, {first}", text_color="#2E7D32"
         )
 
         # Update status bar patient banner
@@ -3606,6 +3651,9 @@ class PureXSApp(ctk.CTk):
         # Clear patient
         self._on_clear_patient()
 
+        # Back to Ready — end the expose cycle so Start Scan reappears.
+        self._expose_cycle_active = False
+
         # Reset canvas to placeholder
         self._last_pil_image = None
         self._canvas.delete("all")
@@ -3614,7 +3662,7 @@ class PureXSApp(ctk.CTk):
         self._canvas_text_id = self._canvas.create_text(
             cw // 2, ch // 2,
             text="No Image\n\nSelect a patient and press EXPOSE",
-            fill="#3A3A3A", font=("Segoe UI", 16), justify="center",
+            fill="#CBD5E1", font=("Segoe UI", 16), justify="center",
         )
         self._img_info_label.configure(text="No image")
 
@@ -3627,16 +3675,32 @@ class PureXSApp(ctk.CTk):
         if self._direct_connected:
             self._set_status("Connected", "#4CAF50")
         else:
-            self._set_status("OFFLINE", "#616161")
+            self._set_status("OFFLINE", "#64748B")
 
         self._log("Ready for new patient", "info")
+        self._update_expose_eligibility()  # restore Start Scan button
 
     def _update_expose_eligibility(self) -> None:
-        """Enable/disable expose buttons based on HB + patient + device readiness."""
-        patient_set = self._patient.get("set", False)
-        hb_active = self._direct_connected
+        """Update the Start Scan button label + enabled state.
 
-        # API expose button: needs API connection + patient + last status READY
+        The button reads "Start Scan" (the call-to-action) ONLY in the Ready
+        state. From the moment an exposure is triggered until the operator
+        returns to Ready (new patient, or a failure/timeout), it stays in place
+        but becomes a passive, disabled "In Session" status — so it can't be
+        re-clicked mid-scan or confused with the physical EXPOSE button on the
+        unit. The status text + kV gauge guide the operator through the cycle.
+        """
+        # Mid-cycle (arming → exposing → processing → review): "In Session".
+        if self._expose_cycle_active:
+            self._expose_btn.configure(text="In Session", state="disabled")
+            return
+
+        # Ready state: restore the call-to-action, then enable per readiness.
+        self._expose_btn.configure(text="☢  Start Scan")
+
+        patient_set = self._patient.get("set", False)
+
+        # Needs API connection + patient + last status READY
         api_ready = self._last_status in ("READY", "CONNECTED")
         if patient_set and self._connected and api_ready:
             self._expose_btn.configure(state="normal")
@@ -3841,7 +3905,7 @@ class PureXSApp(ctk.CTk):
         self._status_label.configure(text=text, text_color=color)
         self._phase_label.configure(
             text=phase,
-            text_color="#B0BEC5" if phase else "#757575",
+            text_color="#475569" if phase else "#64748B",
         )
 
     def _log(self, message: str, level: str = "info") -> None:
@@ -3913,7 +3977,7 @@ class PureXSApp(ctk.CTk):
             # Too short — clear dock
             self._purechart_patients = []
             self._clear_avatar_dock()
-            self._purechart_status.configure(text="", text_color="#757575")
+            self._purechart_status.configure(text="", text_color="#64748B")
             return
         # Schedule search after 400ms of no typing
         self._purechart_debounce_id = self.after(
@@ -3926,8 +3990,11 @@ class PureXSApp(ctk.CTk):
         if self._purechart_searching:
             return  # don't pile up concurrent searches
         self._purechart_searching = True
+        self._purechart_last_query = query
         self._purechart_status.configure(
-            text=f"Searching \"{query}\"...", text_color="#FFA726"
+            text=(f"Searching \"{query}\"..." if query.strip()
+                  else "Loading today's patients..."),
+            text_color="#FFA726",
         )
         threading.Thread(
             target=self._purechart_search_bg,
@@ -3937,9 +4004,16 @@ class PureXSApp(ctk.CTk):
 
     # PHASE 2
     def _purechart_search_bg(self, query: str) -> None:
-        """Background thread: call PureChart API then schedule UI update."""
+        """Background thread: call PureChart API then schedule UI update.
+
+        Empty query → today's scheduled patients (the avatar-dock default);
+        a typed query → patient search. Both return the same patient shape.
+        """
         try:
-            patients = self._purechart_loader.search(query)
+            if query.strip():
+                patients = self._purechart_loader.search(query)
+            else:
+                patients = self._purechart_loader.scheduled_today()
             self.after(0, self._purechart_populate_combo, patients, None)
         except Exception as exc:
             self.after(0, self._purechart_populate_combo, [], exc)
@@ -3952,24 +4026,54 @@ class PureXSApp(ctk.CTk):
         self._purechart_searching = False
 
         if error is not None:
-            self._purechart_status.configure(
-                text="API unreachable — app continues normally",
-                text_color="#EF5350",
-            )
-            self._log(f"PureChart search failed: {error}", "warning")
+            # Branch on HTTP status so the message is accurate and actionable
+            # instead of a blanket "API unreachable". (requests may not be
+            # imported at module scope, so reach the code defensively.)
+            status = getattr(getattr(error, "response", None), "status_code", None)
+            is_startup = not (self._purechart_last_query or "").strip()
+            if status == 401:
+                # Facility token missing / invalid / disabled — auto-prompt once.
+                self._purechart_status.configure(
+                    text="Facility token invalid or disabled — re-enter it",
+                    text_color="#EF5350",
+                )
+                self._log(f"PureChart auth rejected (HTTP 401): {error}", "warning")
+                self._handle_token_rejected()
+            elif status == 400 and is_startup:
+                # Backend hasn't deployed the empty-query "today's patients"
+                # route yet — degrade quietly; search-as-you-type still works.
+                self._clear_avatar_dock()
+                self._purechart_status.configure(
+                    text="Type to search a patient", text_color="#64748B"
+                )
+                self._log(
+                    "PureChart today's-patients load unavailable (HTTP 400) "
+                    "— backend route not deployed; search still works", "info"
+                )
+            else:
+                self._purechart_status.configure(
+                    text="PureChart offline — app continues normally",
+                    text_color="#FFA726",
+                )
+                self._log(
+                    f"PureChart search failed (HTTP {status}): {error}", "warning"
+                )
             return
 
         self._purechart_patients = patients
         if not patients:
             self._clear_avatar_dock()
+            is_startup = not (self._purechart_last_query or "").strip()
             self._purechart_status.configure(
-                text="0 patients found", text_color="#757575"
+                text=("No patients scheduled today — type to search"
+                      if is_startup else "0 patients found"),
+                text_color="#64748B",
             )
             return
 
         self._purechart_status.configure(
             text=f"{len(patients)} results",
-            text_color="#81C784",
+            text_color="#2E7D32",
         )
         self._log(f"PureChart: {len(patients)} results", "info")
         self._build_avatar_dock(patients)
@@ -4029,7 +4133,7 @@ class PureXSApp(ctk.CTk):
                 step[0] += 1
                 t = step[0] / FADE_STEPS
                 t_ease = t * t
-                # Fade dock bg from #0D1117 toward #1A1A2E
+                # Fade dock bg from #F8FAFC toward #FFFFFF
                 r = int(13 + (26 - 13) * t_ease)
                 g = int(17 + (26 - 17) * t_ease)
                 b = int(23 + (46 - 23) * t_ease)
@@ -4101,10 +4205,10 @@ class PureXSApp(ctk.CTk):
                     self._dock_anim_id = self.after(FADE_MS, _fade_in)
                 else:
                     self._dock_anim_id = None
-                    self._dock_frame.configure(fg_color="#0D1117")
+                    self._dock_frame.configure(fg_color="#F8FAFC")
                     for tile in self._avatar_tiles:
                         try:
-                            tile["canvas"].configure(bg="#0D1117")
+                            tile["canvas"].configure(bg="#F8FAFC")
                         except Exception:
                             pass
 
@@ -4190,7 +4294,7 @@ class PureXSApp(ctk.CTk):
 
     def _redraw_avatar(self, canvas, pt, size, highlight=False):
         """Redraw an avatar at the given size with circular crop + glow."""
-        bg_color = "#1A2740" if highlight else "#0D1117"
+        bg_color = "#FFFFFF" if highlight else "#F8FAFC"
         canvas.configure(width=size, height=size, bg=bg_color)
         canvas.delete("all")
 
@@ -4216,7 +4320,7 @@ class PureXSApp(ctk.CTk):
         else:
             # Initials fallback
             canvas.create_oval(3, 3, size - 3, size - 3,
-                               fill="#0F3460", outline="#2A2A4A", width=2)
+                               fill="#DBEAFE", outline="#F1F5F9", width=2)
             if pt:
                 initials = ""
                 if pt.first_name:
@@ -4229,7 +4333,7 @@ class PureXSApp(ctk.CTk):
                                    font=("Helvetica", font_size, "bold"))
 
         # Cyan glow ring on top (always visible over photo)
-        outline_color = "#4FC3F7" if highlight else "#2A2A4A"
+        outline_color = "#1D4ED8" if highlight else "#F1F5F9"
         outline_w = 3 if highlight else 2
         canvas.create_oval(3, 3, size - 3, size - 3,
                            fill="", outline=outline_color, width=outline_w)
@@ -4240,7 +4344,7 @@ class PureXSApp(ctk.CTk):
 
         popup = tk.Toplevel(self)
         popup.overrideredirect(True)
-        popup.configure(bg="#4FC3F7")
+        popup.configure(bg="#1D4ED8")
         popup.attributes("-topmost", True)
         # Start transparent, fade in
         popup.attributes("-alpha", 0.0)
@@ -4250,16 +4354,16 @@ class PureXSApp(ctk.CTk):
         popup.geometry(f"+{dock_x}+{avatar_y}")
 
         # Outer border (1px cyan)
-        inner = tk.Frame(popup, bg="#1E2A44", padx=14, pady=10)
+        inner = tk.Frame(popup, bg="#FFFFFF", padx=14, pady=10)
         inner.pack(padx=1, pady=1)
 
         name = f"{pt.first_name} {pt.last_name}"
-        tk.Label(inner, text=name, fg="white", bg="#1E2A44",
+        tk.Label(inner, text=name, fg="white", bg="#FFFFFF",
                  font=("Helvetica", 13, "bold")).pack(anchor="w")
 
         if pt.medical_record_number:
             tk.Label(inner, text=pt.medical_record_number,
-                     fg="#4FC3F7", bg="#1E2A44",
+                     fg="#1D4ED8", bg="#FFFFFF",
                      font=("Consolas", 10)).pack(anchor="w", pady=(2, 0))
 
         details = []
@@ -4268,7 +4372,7 @@ class PureXSApp(ctk.CTk):
         if pt.phone:
             details.append(f"Tel  {pt.phone}")
         for d in details:
-            tk.Label(inner, text=d, fg="#90A4AE", bg="#1E2A44",
+            tk.Label(inner, text=d, fg="#64748B", bg="#FFFFFF",
                      font=("Helvetica", 10)).pack(anchor="w")
 
         self._hover_popup = popup
@@ -4310,7 +4414,7 @@ class PureXSApp(ctk.CTk):
             # Single column — each tile is one row
             canvas = tk.Canvas(
                 self._avatar_dock_frame, width=TILE_SIZE, height=TILE_SIZE,
-                bg="#0D1117", highlightthickness=0, cursor="hand2",
+                bg="#F8FAFC", highlightthickness=0, cursor="hand2",
             )
             canvas.pack(padx=4, pady=3)
 
@@ -4323,7 +4427,7 @@ class PureXSApp(ctk.CTk):
             initials = initials or "?"
 
             canvas.create_oval(3, 3, TILE_SIZE - 3, TILE_SIZE - 3,
-                               fill="#0F3460", outline="#2A2A4A", width=2)
+                               fill="#DBEAFE", outline="#F1F5F9", width=2)
             canvas.create_text(TILE_SIZE // 2, TILE_SIZE // 2,
                                text=initials, fill="white",
                                font=("Helvetica", 14, "bold"))
@@ -4432,9 +4536,9 @@ class PureXSApp(ctk.CTk):
             initials += pt.last_name[0].upper()
         initials = initials or "?"
         self._profile_avatar_canvas.delete("all")
-        self._profile_avatar_canvas.create_oval(2, 2, 62, 62, fill="#37474F", outline="#546E7A", width=2)
+        self._profile_avatar_canvas.create_oval(2, 2, 62, 62, fill="#64748B", outline="#94A3B8", width=2)
         self._profile_initials = self._profile_avatar_canvas.create_text(
-            32, 32, text=initials, fill="#B0BEC5",
+            32, 32, text=initials, fill="#475569",
             font=("Helvetica", 18, "bold"),
         )
         self._profile_photo = None
@@ -4493,7 +4597,7 @@ class PureXSApp(ctk.CTk):
 
             self._profile_photo = ImageTk.PhotoImage(bg)
             self._profile_avatar_canvas.delete("all")
-            self._profile_avatar_canvas.create_oval(2, 2, 62, 62, fill="#162029", outline="#546E7A", width=2)
+            self._profile_avatar_canvas.create_oval(2, 2, 62, 62, fill="#F8FAFC", outline="#94A3B8", width=2)
             self._profile_avatar_canvas.create_image(32, 32, image=self._profile_photo, anchor="center")
         except Exception as exc:
             log.debug("Failed to render profile image: %s", exc)
@@ -4628,12 +4732,12 @@ class PureXSApp(ctk.CTk):
         self._upload_progress.set(1.0)
         self._upload_status_label.configure(
             text=f"Uploaded ({result.size:,} bytes)",
-            text_color="#81C784",
+            text_color="#2E7D32",
         )
         self._upload_retry_btn.pack_forget()
         self._purechart_status.configure(
             text=f"Uploaded to PureChart ({result.size:,} bytes)",
-            text_color="#81C784",
+            text_color="#2E7D32",
         )
         self._last_upload_args = ()  # clear — no retry needed
 
@@ -4691,7 +4795,7 @@ class PureXSApp(ctk.CTk):
             except Exception:
                 pass
 
-        self._log("PureXS GUI shutting down", "info")
+        self._log("PureChart GUI shutting down", "info")
         self.destroy()
 
 
