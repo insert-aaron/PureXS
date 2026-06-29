@@ -586,8 +586,8 @@ class PureXSApp(ctk.CTk):
 
         # ── Window setup ─────────────────────────────────────────────────────
         self.title("PureChart — Sirona Direct Control")
-        self.geometry("1280x820")
-        self.minsize(960, 700)
+        self.geometry("1360x820")
+        self.minsize(1120, 700)
 
         ctk.set_appearance_mode("light")
         ctk.set_default_color_theme("blue")
