@@ -1013,6 +1013,76 @@
                     BorderBrush="{DynamicResource BorderPrimary}"
                     BorderThickness="1"
                     ClipToBounds="True">
+                <DockPanel>
+                <!-- ── Pinned review footer — Confirm & Send stays visible
+                     during review so it's never below the scroll fold. The
+                     scrollable content above fills the remaining space. ── -->
+                <Border DockPanel.Dock="Bottom"
+                        Visibility="{Binding IsReviewingImage, Converter={StaticResource BoolToVis}}"
+                        Background="{DynamicResource PanelBg}"
+                        BorderBrush="{DynamicResource BorderPrimary}"
+                        BorderThickness="0,1,0,0"
+                        Padding="0,12,0,0"
+                        Margin="0,8,0,0">
+                    <StackPanel>
+                        <!-- Review status -->
+                        <TextBlock Text="{Binding ReviewStatus}"
+                                   Foreground="{Binding ReviewStatusColor}"
+                                   FontSize="12"
+                                   HorizontalAlignment="Center"
+                                   Margin="0,0,0,10" />
+
+                        <!-- Confirm & Send -->
+                        <Button Command="{Binding ConfirmImageCommand}"
+                                Padding="14,12"
+                                FontSize="14"
+                                FontWeight="SemiBold"
+                                Cursor="Hand"
+                                Margin="0,0,0,8">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="border"
+                                            Background="{DynamicResource GreenBtnBg}"
+                                            CornerRadius="8"
+                                            Padding="{TemplateBinding Padding}"
+                                            BorderBrush="{DynamicResource GreenBtnBorder}"
+                                            BorderThickness="2">
+                                        <ContentPresenter HorizontalAlignment="Center"
+                                                          VerticalAlignment="Center" />
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="border" Property="Background" Value="{DynamicResource GreenBtnHover}" />
+                                        </Trigger>
+                                        <Trigger Property="IsEnabled" Value="False">
+                                            <Setter TargetName="border" Property="Background" Value="{DynamicResource DisabledBg}" />
+                                            <Setter Property="Foreground" Value="{DynamicResource DisabledText}" />
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                            <TextBlock Text="Confirm &amp; Send" Foreground="White" />
+                        </Button>
+
+                        <!-- Retake -->
+                        <Button Content="Retake"
+                                Command="{Binding RetakeCommand}"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                HorizontalAlignment="Stretch"
+                                Padding="14,10"
+                                FontSize="13"
+                                Margin="0,0,0,8" />
+
+                        <!-- Retry Upload (visible only when upload failed) -->
+                        <Button Content="Retry Upload"
+                                Command="{Binding RetryUploadCommand}"
+                                Style="{StaticResource OrangeButtonStyle}"
+                                HorizontalAlignment="Stretch"
+                                Padding="14,10"
+                                FontSize="13"
+                                Visibility="{Binding IsUploadFailed, Converter={StaticResource BoolToVis}}" />
+                    </StackPanel>
+                </Border>
                 <ScrollViewer VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled">
                 <StackPanel>
@@ -1506,69 +1576,9 @@
                         </StackPanel>
                     </Border>
 
-                    <Border Height="1" Background="{DynamicResource BorderPrimary}" Margin="0,14,0,14" />
-
-                    <!-- ── Upload Controls (visible during review) ───── -->
-                    <StackPanel Visibility="{Binding IsReviewingImage, Converter={StaticResource BoolToVis}}">
-                        <!-- Review status -->
-                        <TextBlock Text="{Binding ReviewStatus}"
-                                   Foreground="{Binding ReviewStatusColor}"
-                                   FontSize="12"
-                                   HorizontalAlignment="Center"
-                                   Margin="0,0,0,10" />
-
-                        <!-- Confirm & Send -->
-                        <Button Command="{Binding ConfirmImageCommand}"
-                                Padding="14,12"
-                                FontSize="14"
-                                FontWeight="SemiBold"
-                                Cursor="Hand"
-                                Margin="0,0,0,8">
-                            <Button.Template>
-                                <ControlTemplate TargetType="Button">
-                                    <Border x:Name="border"
-                                            Background="{DynamicResource GreenBtnBg}"
-                                            CornerRadius="8"
-                                            Padding="{TemplateBinding Padding}"
-                                            BorderBrush="{DynamicResource GreenBtnBorder}"
-                                            BorderThickness="2">
-                                        <ContentPresenter HorizontalAlignment="Center"
-                                                          VerticalAlignment="Center" />
-                                    </Border>
-                                    <ControlTemplate.Triggers>
-                                        <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="border" Property="Background" Value="{DynamicResource GreenBtnHover}" />
-                                        </Trigger>
-                                        <Trigger Property="IsEnabled" Value="False">
-                                            <Setter TargetName="border" Property="Background" Value="{DynamicResource DisabledBg}" />
-                                            <Setter Property="Foreground" Value="{DynamicResource DisabledText}" />
-                                        </Trigger>
-                                    </ControlTemplate.Triggers>
-                                </ControlTemplate>
-                            </Button.Template>
-                            <TextBlock Text="Confirm &amp; Send" Foreground="White" />
-                        </Button>
-
-                        <!-- Retake -->
-                        <Button Content="Retake"
-                                Command="{Binding RetakeCommand}"
-                                Style="{StaticResource ToolbarButtonStyle}"
-                                HorizontalAlignment="Stretch"
-                                Padding="14,10"
-                                FontSize="13"
-                                Margin="0,0,0,8" />
-
-                        <!-- Retry Upload (visible only when upload failed) -->
-                        <Button Content="Retry Upload"
-                                Command="{Binding RetryUploadCommand}"
-                                Style="{StaticResource OrangeButtonStyle}"
-                                HorizontalAlignment="Stretch"
-                                Padding="14,10"
-                                FontSize="13"
-                                Visibility="{Binding IsUploadFailed, Converter={StaticResource BoolToVis}}" />
-                    </StackPanel>
                 </StackPanel>
                 </ScrollViewer>
+                </DockPanel>
             </Border>
 
             <!-- ============================================================ -->

@@ -15,7 +15,7 @@ public interface IPureChartService
     Task<List<PureChartPatient>> ScheduledTodayAsync(string? day = null, CancellationToken ct = default);
 
     /// <summary>Upload an X-ray file to a patient's chart.</summary>
-    Task<UploadResult> UploadAsync(string patientId, byte[] fileBytes, string contentType, string uploadType, string title, CancellationToken ct = default);
+    Task<UploadResult> UploadAsync(string patientId, byte[] fileBytes, string contentType, string uploadType, string title, string? originalFilename = null, CancellationToken ct = default);
 
     /// <summary>Download a profile picture (requires auth headers). Returns image bytes or null.</summary>
     Task<byte[]?> DownloadImageAsync(string url, CancellationToken ct = default);

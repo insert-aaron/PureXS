@@ -93,7 +93,8 @@ public sealed class PureChartService : IPureChartService, IDisposable
 
     public async Task<UploadResult> UploadAsync(
         string patientId, byte[] fileBytes, string contentType,
-        string uploadType, string title, CancellationToken ct = default)
+        string uploadType, string title, string? originalFilename = null,
+        CancellationToken ct = default)
     {
         var payload = new
         {
@@ -102,6 +103,7 @@ public sealed class PureChartService : IPureChartService, IDisposable
             contentType,
             type = uploadType,
             title,
+            originalFilename,
         };
 
         var response = await _http.PostAsJsonAsync(UploadUrl, payload, ct);

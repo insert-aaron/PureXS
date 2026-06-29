@@ -1321,6 +1321,17 @@ class PureXSApp(ctk.CTk):
         toolbar_btns = ctk.CTkFrame(self._toolbar_frame, fg_color="transparent")
         toolbar_btns.pack(fill="x", padx=8, pady=(2, 6))
 
+        # Confirm & Send — the manual review gate (matches WPF). Upload to
+        # PureChart happens ONLY when the operator reviews and clicks this, so a
+        # scan is never sent before review. Primary green action, leftmost.
+        self._confirm_send_btn = ctk.CTkButton(
+            toolbar_btns, text="✓ Confirm & Send", width=150, height=28,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#16A34A", hover_color="#15803D",
+            command=self._on_confirm_send, state="disabled",
+        )
+        self._confirm_send_btn.pack(side="left", padx=(0, 8))
+
         self._save_btn = ctk.CTkButton(
             toolbar_btns, text="Save PNG", width=90, height=28,
             font=ctk.CTkFont(size=10),
@@ -1379,7 +1390,7 @@ class PureXSApp(ctk.CTk):
             toolbar_btns, text="New Patient", width=100, height=28,
             font=ctk.CTkFont(size=10, weight="bold"),
             fg_color="#1B5E20", hover_color="#2E7D32",
-            command=self._on_new_patient, state="disabled",
+            command=self._on_new_patient_clicked, state="disabled",
         )
         self._new_patient_btn.pack(side="right", padx=(0, 8))
 
@@ -2344,6 +2355,9 @@ class PureXSApp(ctk.CTk):
             return
 
         if self._direct_connected:
+            # Disconnecting also abandons an unsent scan — warn first.
+            if not self._confirm_discard_unsent_scan():
+                return
             self._stop_hb_monitor_direct()
         else:
             self._start_hb_monitor_direct()
@@ -2968,8 +2982,10 @@ class PureXSApp(ctk.CTk):
         # Save patient-named outputs (PNG, events, sessions.json)
         self._save_patient_outputs(elapsed, sl_count)
 
-        # PHASE 3 — Auto-upload to PureChart
-        self._phase3_upload_to_purechart()
+        # PHASE 3 — upload is now MANUAL (matches the WPF review gate). The
+        # operator reviews the displayed image and clicks "Confirm & Send" to
+        # push to PureChart. The button is enabled in _enable_post_toolbar once
+        # the panoramic is displayed (and a PureChart patient is selected).
 
         # Auto-stitch panoramic if we got scanlines
         # (DICOM export happens after reconstruction completes in _on_stitch_done)
@@ -3339,6 +3355,11 @@ class PureXSApp(ctk.CTk):
         self._save_raw_btn.configure(state="normal")
         self._fit_btn.configure(state="normal")
         self._preview_edit_btn.configure(state="normal")
+        # Confirm & Send only makes sense when there's a PureChart patient to
+        # send to (manual-entry / no-patient scans have no upload target).
+        self._confirm_send_btn.configure(
+            state="normal" if self._selected_purechart else "disabled"
+        )
 
     def _disable_post_toolbar(self) -> None:
         """Disable all post-display toolbar controls."""
@@ -3351,6 +3372,18 @@ class PureXSApp(ctk.CTk):
         self._view_dcm_btn.configure(state="disabled")
         self._fit_btn.configure(state="disabled")
         self._preview_edit_btn.configure(state="disabled")
+        self._confirm_send_btn.configure(state="disabled")
+
+    def _on_confirm_send(self) -> None:
+        """Manual review gate — send the reviewed image to PureChart on click."""
+        if not self._selected_purechart:
+            Toast(self, "No PureChart patient selected — nothing to send",
+                  level="warning")
+            return
+        # Disable to prevent a double-send; _phase3 shows the uploading UI and
+        # a retry button on failure.
+        self._confirm_send_btn.configure(state="disabled")
+        self._phase3_upload_to_purechart()
 
     _adjust_debounce_id: str | None = None
 
@@ -3684,6 +3717,35 @@ class PureXSApp(ctk.CTk):
         self._update_expose_eligibility()
 
         self._log("Patient cleared", "info")
+
+    def _confirm_discard_unsent_scan(self) -> bool:
+        """If a scan is displayed but unsent (Confirm & Send not completed),
+        warn that proceeding discards it without uploading to PureChart.
+
+        Returns True if it's safe to proceed (no unsent scan, or the operator
+        confirmed). Shared by New Patient, Disconnect, and window-close. The
+        auto-reset after a successful send calls the pure reset directly, so
+        this only fires on a genuine manual action with an unsent image.
+        """
+        if self._last_pil_image is None:
+            return True
+        from tkinter import messagebox
+        p = self._patient
+        who = f"{p.get('first', '')} {p.get('last', '')}".strip() \
+            or "the current patient"
+        return messagebox.askyesno(
+            "X-ray not sent",
+            "This X-ray has NOT been sent to PureChart.\n\n"
+            f"Continuing will discard it without uploading to {who}'s chart.\n\n"
+            "Continue anyway?",
+            icon="warning",
+        )
+
+    def _on_new_patient_clicked(self) -> None:
+        """New Patient *button* handler — warns if an unsent scan would be lost."""
+        if not self._confirm_discard_unsent_scan():
+            return
+        self._on_new_patient()
 
     def _on_new_patient(self) -> None:
         """One-click reset: clear patient, clear canvas, re-show dock."""
@@ -4690,7 +4752,9 @@ class PureXSApp(ctk.CTk):
         patient_id = self._selected_purechart.id
         exam_type = self._patient.get("exam", "Panoramic")
         upload_type = EXAM_TYPE_MAP.get(exam_type, "xrays") if HAS_PURECHART else "xrays"
-        title = f"{exam_type} — {self._patient['last']}, {self._patient['first']}"
+        # Aligned with WPF: "Panoramic — Test, Philip — 2026-06-28"
+        title = (f"{exam_type} — {self._patient['last']}, "
+                 f"{self._patient['first']} — {datetime.now():%Y-%m-%d}")
 
         self._log(
             f"PureChart: uploading {pano_path.name} to patient {patient_id} "
@@ -4742,6 +4806,9 @@ class PureXSApp(ctk.CTk):
                 level="success",
                 duration_ms=4000,
             )
+            # Match WPF: after a brief success pause, clear the patient + image
+            # for the next scan while staying connected.
+            self.after(1500, self._reset_flow_after_send)
         else:
             self._phase5_show_failure(f"Upload failed: {result.error}")
             self._log(
@@ -4754,6 +4821,12 @@ class PureXSApp(ctk.CTk):
                 level="warning",
                 duration_ms=5000,
             )
+
+    def _reset_flow_after_send(self) -> None:
+        """Reset after a successful PureChart send (mirrors WPF): clear the
+        patient + image for the next scan but STAY CONNECTED, so the next
+        patient is one scan away without reconnecting."""
+        self._on_new_patient()
 
     # PHASE 3
     def _phase3_upload_error(self, exc: Exception) -> None:
@@ -4841,6 +4914,10 @@ class PureXSApp(ctk.CTk):
 
     def _on_close(self) -> None:
         """Clean shutdown: stop HB, disconnect device, destroy window."""
+        # Closing also abandons an unsent scan — warn first; keep window open
+        # if the operator backs out.
+        if not self._confirm_discard_unsent_scan():
+            return
         self._stop_hb_monitor()
 
         # Stop direct TCP monitor if active

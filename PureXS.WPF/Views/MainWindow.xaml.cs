@@ -52,6 +52,21 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Closing the window (X / Alt+F4) also abandons an unsent scan — warn first
+    /// and cancel the close if the operator backs out. Covers the custom chrome
+    /// CloseBtn too, since it calls Close().
+    /// </summary>
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        if (!ViewModel.ConfirmDiscardUnsentScan())
+        {
+            e.Cancel = true;
+            return;
+        }
+        base.OnClosing(e);
+    }
+
+    /// <summary>
     /// Toggles between dark and light theme. Wire to a button or keyboard shortcut.
     /// </summary>
     public void ToggleTheme()

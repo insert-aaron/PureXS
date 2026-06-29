@@ -171,7 +171,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
     [NotifyCanExecuteChangedFor(nameof(RetryUploadCommand))]
     private bool _isUploadFailed;
 
-    private (string patientId, byte[] fileBytes, string contentType, string uploadType, string title)? _lastUploadArgs;
+    private (string patientId, byte[] fileBytes, string contentType, string uploadType, string title, string originalFilename)? _lastUploadArgs;
 
     private Window? _historyWindow;
 
@@ -325,6 +325,9 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
     {
         if (IsConnected)
         {
+            // Disconnecting also abandons an unsent scan — warn first.
+            if (!ConfirmDiscardUnsentScan()) return;
+
             // Disconnect
             await _sirona.DisconnectAsync();
             ConnectButtonText = "Connect to Device";
@@ -511,10 +514,15 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         try
         {
             var uploadType = ExamTypes.ToPureChartType(SelectedExamType);
-            var title = $"PureXS {uploadType} capture";
+            // Aligned title + filename (identical format in the Python app):
+            //   title    "Panoramic — Test, Philip — 2026-06-28"
+            //   filename "Test_Philip_19760406_20260628_180207_panoramic.png"
+            var title = $"{SelectedExamType} — {SelectedPatient.LastName}, {SelectedPatient.FirstName} — {DateTime.Now:yyyy-MM-dd}";
+            var examLabel = SelectedExamType.ToLowerInvariant().Replace(" ", "_");
+            var fileName = $"{_patientOutput.GetFilePrefix(SelectedPatient.LastName, SelectedPatient.FirstName, SelectedPatient.Dob)}_{examLabel}.png";
 
             // Store args for retry
-            _lastUploadArgs = (SelectedPatient.Id, _lastImageBytes, "image/png", uploadType, title);
+            _lastUploadArgs = (SelectedPatient.Id, _lastImageBytes, "image/png", uploadType, title, fileName);
 
             var result = await _pureChart.UploadAsync(
                 SelectedPatient.Id,
@@ -522,6 +530,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                 "image/png",
                 uploadType,
                 title,
+                fileName,
                 CancellationToken.None);
 
             if (result.Success)
@@ -537,8 +546,10 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                 // Brief pause so user sees the success message
                 await Task.Delay(1500);
 
-                // Full reset
-                await ResetFlowAsync();
+                // Stay connected — clear the patient + image for the next scan
+                // without dropping the device connection. (Pure reset, no
+                // unsent-scan warning — this scan was just sent successfully.)
+                ResetForNewPatient();
             }
             else
             {
@@ -584,6 +595,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                 args.contentType,
                 args.uploadType,
                 args.title,
+                args.originalFilename,
                 CancellationToken.None);
 
             if (result.Success)
@@ -597,7 +609,10 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                 _log.Log($"Retry upload success for patient {args.patientId}, type={args.uploadType}");
 
                 await Task.Delay(1500);
-                await ResetFlowAsync();
+                // Stay connected — clear the patient + image for the next scan
+                // without dropping the device connection. (Pure reset, no
+                // unsent-scan warning — this scan was just sent successfully.)
+                ResetForNewPatient();
             }
             else
             {
@@ -640,32 +655,6 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
     }
 
     private bool CanRetake() => IsReviewingImage && !IsUploading;
-
-    /// <summary>
-    /// Full reset: clear patient, clear image, disconnect, restart flow.
-    /// </summary>
-    private async Task ResetFlowAsync()
-    {
-        // Clear image
-        ReceivedImage = null;
-        _lastImageBytes = null;
-        IsReviewingImage = false;
-        IsUploadFailed = false;
-        _lastUploadArgs = null;
-        ReviewStatus = "";
-        LastDcmPath = null;
-
-        // Clear patient
-        SelectedPatient = null;
-
-        // Disconnect
-        await _sirona.DisconnectAsync();
-        ConnectButtonText = "Connect to Device";
-        MachineStatus = "Disconnected";
-        MachineIndicator = Brushes.Gray;
-        IsConnected = false;
-        HbStatusText = "HB: --";
-    }
 
     // ── Image viewer commands ────────────────────────────────────────────
 
@@ -720,6 +709,34 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     [RelayCommand]
     private void NewPatient()
+    {
+        if (!ConfirmDiscardUnsentScan()) return;
+        ResetForNewPatient();
+    }
+
+    /// <summary>
+    /// If a scan is in review and not yet sent (Confirm &amp; Send not completed),
+    /// warn that proceeding will discard it without uploading to PureChart.
+    /// Returns true if it's safe to proceed (no unsent scan, or the operator
+    /// confirmed). Shared by New Patient, Disconnect, and window-close.
+    /// </summary>
+    public bool ConfirmDiscardUnsentScan()
+    {
+        if (!IsReviewingImage) return true;
+        var who = SelectedPatient is not null
+            ? $"{SelectedPatient.FirstName} {SelectedPatient.LastName}"
+            : "the current patient";
+        var choice = MessageBox.Show(
+            "This X-ray has NOT been sent to PureChart.\n\n" +
+            $"Continuing will discard it without uploading to {who}'s chart.\n\n" +
+            "Continue anyway?",
+            "X-ray not sent",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        return choice == MessageBoxResult.Yes;
+    }
+
+    private void ResetForNewPatient()
     {
         ReceivedImage = null;
         DisplayImage = null;
