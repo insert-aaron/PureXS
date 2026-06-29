@@ -16,6 +16,14 @@ public interface IConfigService
     void SaveSironaEndpoint(string host, int port);
 
     /// <summary>
+    /// Installer-set label identifying THIS physical unit in a multi-unit fleet
+    /// (config.json "unit_id", e.g. "Op-3 Orthophos"). Stamped into every scan's
+    /// sessions.json + events.log so scans are attributable to a unit. Null when
+    /// unset — callers fall back to the machine name.
+    /// </summary>
+    string? UnitId { get; }
+
+    /// <summary>
     /// When true, every scan's panoramic is also written as an uncompressed
     /// 8-bit TIFF in the patient directory next to the PNG. Used only by
     /// facilities running per-device Sidexis LUT calibration; default false

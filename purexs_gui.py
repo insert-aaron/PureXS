@@ -48,6 +48,7 @@ try:
         SironaLiveClient, KVSample, Scanline,
         reconstruct_image, reconstruct_ceph_image,
         check_scan_completeness,
+        check_detector_geometry,
     )
     HAS_HB_DECODER = True
 except ImportError:
@@ -740,6 +741,27 @@ class PureXSApp(ctk.CTk):
         cfg["facility_token"] = token
         cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
+    def _unit_attribution(self) -> tuple[str, str | None]:
+        """Return (unit_id, device_host) for stamping scans in a fleet.
+
+        unit_id comes from config.json "unit_id" (installer-set per machine),
+        falling back to the hostname. device_host is the connected Sirona
+        endpoint IP. Lets a 6-unit fleet attribute every scan to a unit.
+        """
+        unit_id = ""
+        try:
+            cfg_path = self._get_config_path()
+            if cfg_path.exists():
+                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                unit_id = str(cfg.get("unit_id", "")).strip()
+        except Exception:
+            pass
+        if not unit_id:
+            import socket
+            unit_id = socket.gethostname()
+        host = getattr(self._sirona_client, "host", None) if self._sirona_client else None
+        return unit_id, host
+
     def _handle_token_rejected(self) -> None:
         """A PureChart call returned 401 (invalid/disabled token).
 
@@ -853,15 +875,15 @@ class PureXSApp(ctk.CTk):
         self._main_grid = ctk.CTkFrame(self, fg_color="transparent")
         main = self._main_grid
         main.pack(fill="both", expand=True, padx=8, pady=(4, 0))
-        main.columnconfigure(0, weight=0, minsize=90)   # patient dock
-        main.columnconfigure(1, weight=1, minsize=300)   # controls
+        main.columnconfigure(0, weight=0, minsize=124)  # patient dock (wider search)
+        main.columnconfigure(1, weight=1, minsize=380)   # controls (wider sidebar)
         main.columnconfigure(2, weight=2, minsize=400)   # canvas
         main.rowconfigure(0, weight=1)
 
         # ═══════════════════════════════════════════════════════════════════
         # PATIENT DOCK (far left — vertical scrollable avatar strip)
         # ═══════════════════════════════════════════════════════════════════
-        self._dock_frame = ctk.CTkFrame(main, corner_radius=10, fg_color="#F8FAFC", width=88)
+        self._dock_frame = ctk.CTkFrame(main, corner_radius=10, fg_color="#F8FAFC", width=116)
         self._dock_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4), pady=0)
         self._dock_frame.grid_propagate(False)
         self._dock_visible = True
@@ -873,7 +895,7 @@ class PureXSApp(ctk.CTk):
             self._dock_frame,
             textvariable=self._purechart_search_var,
             placeholder_text="\U0001F50D Search",
-            width=76, height=28,
+            width=104, height=28,
             font=ctk.CTkFont(size=10),
             corner_radius=6,
             fg_color="#FFFFFF",
@@ -887,14 +909,14 @@ class PureXSApp(ctk.CTk):
         # Status label (result count / loading / errors)
         self._purechart_status = ctk.CTkLabel(
             self._dock_frame, text="", font=ctk.CTkFont(size=8),
-            text_color="#64748B", wraplength=76,
+            text_color="#64748B", wraplength=104,
         )
         self._purechart_status.pack(padx=4, pady=(0, 2))
 
         # Scrollable avatar column (single column, vertical)
         self._avatar_dock_frame = ctk.CTkScrollableFrame(
             self._dock_frame, fg_color="#F8FAFC", corner_radius=0,
-            width=76, label_text="",
+            width=104, label_text="",
         )
         self._avatar_dock_frame.pack(fill="both", expand=True, padx=2, pady=(0, 4))
         self._avatar_tiles: list[dict] = []
@@ -3156,6 +3178,27 @@ class PureXSApp(ctk.CTk):
         # produces a misleading stretched fragment; surface a clear retake
         # prompt instead.
         exam = self._patient.get("exam", "Panoramic")
+
+        # Hard geometry gate — if this unit's detector isn't the Orthophos XG
+        # the pipeline targets, refuse to reconstruct (would be garbage) and
+        # fail loud instead of showing a corrupted image.
+        geo_ok, geo_msg = check_detector_geometry(self._expose_scanlines)
+        if not geo_ok:
+            self._log(geo_msg, "error")
+            self._canvas.delete("all")
+            cw = self._canvas.winfo_width()
+            ch = self._canvas.winfo_height()
+            if cw < 10:
+                cw, ch = 800, 500
+            self._canvas.create_text(
+                cw // 2, ch // 2,
+                text="UNSUPPORTED UNIT\n\n" + geo_msg,
+                fill="#EF4444", font=("Helvetica", 14), justify="center",
+                width=cw - 40,
+            )
+            Toast(self, geo_msg, level="error", duration_ms=12000)
+            return
+
         ok, retake_msg = check_scan_completeness(self._expose_scanlines, exam)
         if not ok:
             self._log(retake_msg, "warning")
@@ -3690,13 +3733,25 @@ class PureXSApp(ctk.CTk):
         re-clicked mid-scan or confused with the physical EXPOSE button on the
         unit. The status text + kV gauge guide the operator through the cycle.
         """
-        # Mid-cycle (arming → exposing → processing → review): "In Session".
+        # Mid-cycle (arming → exposing → processing → review): show an amber
+        # status pill ("In Session"), NOT a greyed-out button. fg_color stays
+        # vivid amber even while disabled (CTk only swaps the text colour when
+        # disabled); text_color_disabled keeps the label readable white.
         if self._expose_cycle_active:
-            self._expose_btn.configure(text="In Session", state="disabled")
+            self._expose_btn.configure(
+                text="In Session", state="disabled",
+                fg_color="#F59E0B", hover_color="#F59E0B",
+                text_color_disabled="#FFFFFF",
+            )
             return
 
-        # Ready state: restore the call-to-action, then enable per readiness.
-        self._expose_btn.configure(text="☢  Start Scan")
+        # Ready state: restore the red call-to-action (and normal disabled
+        # dimming for the no-patient case), then enable per readiness.
+        self._expose_btn.configure(
+            text="☢  Start Scan",
+            fg_color="#B71C1C", hover_color="#D32F2F",
+            text_color_disabled="#94A3B8",
+        )
 
         patient_set = self._patient.get("set", False)
 
@@ -3846,6 +3901,9 @@ class PureXSApp(ctk.CTk):
                     except Exception as exc:
                         self._log(f"TIF save failed: {exc}", "warning")
 
+        # Unit attribution — which fleet machine produced this scan.
+        unit_id, device_host = self._unit_attribution()
+
         # 2. Save events log for this expose
         events_filename = f"{prefix}_events.log"
         events_path = outdir / events_filename
@@ -3856,6 +3914,7 @@ class PureXSApp(ctk.CTk):
                 f.write(f"Patient: {p['last']}, {p['first']}\n")
                 f.write(f"DOB: {p['dob']}\n")
                 f.write(f"Patient ID: {p['id']}\n")
+                f.write(f"Unit: {unit_id} ({device_host or '?'})\n")
                 f.write(f"Exam: {p['exam']}\n")
                 f.write(f"Timestamp: {ts}\n")
                 f.write(f"Scanlines: {sl_count}\n")
@@ -3875,6 +3934,8 @@ class PureXSApp(ctk.CTk):
 
         sessions.append({
             "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "unit_id": unit_id,
+            "device_host": device_host,
             "exam_type": self._patient.get("exam", ""),
             "kv_peak": round(self._expose_kv_peak, 1),
             "scanlines": sl_count,

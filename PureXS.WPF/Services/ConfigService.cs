@@ -9,6 +9,7 @@ public class ConfigService : IConfigService
     private readonly string _configDir;
     private readonly string _configPath;
     private string? _facilityToken;
+    private string? _unitId;
     private string? _sironaHost;
     private int? _sironaPort;
     private bool _saveTifExport;
@@ -30,6 +31,8 @@ public class ConfigService : IConfigService
     public string? FacilityToken => _facilityToken;
 
     public string ConfigDirectory => _configDir;
+
+    public string? UnitId => _unitId;
 
     public string? SironaHost => _sironaHost;
 
@@ -100,6 +103,7 @@ public class ConfigService : IConfigService
             var json = File.ReadAllText(_configPath);
             var root = JsonNode.Parse(json)?.AsObject();
             _facilityToken = root?["facility_token"]?.GetValue<string>();
+            _unitId = root?["unit_id"]?.GetValue<string>();
             _sironaHost = root?["sirona_host"]?.GetValue<string>();
             var portNode = root?["sirona_port"];
             if (portNode is not null)

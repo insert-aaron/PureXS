@@ -80,7 +80,7 @@ public class PatientOutputService : IPatientOutputService
         return filePath;
     }
 
-    public async Task SaveEventsLogAsync(string patientDir, string filePrefix, string examType, int scanlines, double peakKv, double elapsed, CancellationToken ct = default)
+    public async Task SaveEventsLogAsync(string patientDir, string filePrefix, string examType, int scanlines, double peakKv, double elapsed, string? unitId = null, string? deviceHost = null, CancellationToken ct = default)
     {
         var filename = $"{filePrefix}_events.log";
         var filePath = Path.Combine(patientDir, filename);
@@ -89,6 +89,7 @@ public class PatientOutputService : IPatientOutputService
         sb.AppendLine("PureXS Exposure Events Log");
         sb.AppendLine("==========================");
         sb.AppendLine($"Timestamp:    {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        sb.AppendLine($"Unit:         {unitId ?? "unknown"}  ({deviceHost ?? "?"})");
         sb.AppendLine($"Exam Type:    {examType}");
         sb.AppendLine($"Scanlines:    {scanlines}");
         sb.AppendLine($"Peak kV:      {peakKv:F1}");
@@ -106,7 +107,7 @@ public class PatientOutputService : IPatientOutputService
         }
     }
 
-    public async Task AppendSessionAsync(string patientDir, string examType, double kvPeak, int scanlines, string? imageFile, string? eventsLog, string? dcmFile, CancellationToken ct = default)
+    public async Task AppendSessionAsync(string patientDir, string examType, double kvPeak, int scanlines, string? imageFile, string? eventsLog, string? dcmFile, string? unitId = null, string? deviceHost = null, CancellationToken ct = default)
     {
         var sessionsPath = Path.Combine(patientDir, "sessions.json");
 
@@ -132,6 +133,8 @@ public class PatientOutputService : IPatientOutputService
             var entry = new SessionEntry
             {
                 Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                UnitId = unitId,
+                DeviceHost = deviceHost,
                 ExamType = examType,
                 KvPeak = kvPeak,
                 Scanlines = scanlines,

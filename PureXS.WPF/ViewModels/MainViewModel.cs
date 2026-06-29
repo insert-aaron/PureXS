@@ -1313,6 +1313,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         byte[]? processedBytes = null;
         _lastTifSourcePath = null;
         string? incompleteScanMessage = null;
+        string? detectorMismatchMessage = null;
         try
         {
             var processed = await _imageProcessor.ProcessRawScanAsync(rawBytes, SelectedExamType);
@@ -1331,6 +1332,14 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             incompleteScanMessage = ex.Message;
             Debug.WriteLine($"[MainVM] Scan incomplete: {ex.Message}");
         }
+        catch (DetectorMismatchException ex)
+        {
+            // This unit's detector doesn't match the pipeline. NOT retakeable —
+            // fail loud and skip the scanline fallback (those columns would be
+            // garbage too) rather than show a corrupted image.
+            detectorMismatchMessage = ex.Message;
+            Debug.WriteLine($"[MainVM] Detector mismatch: {ex.Message}");
+        }
         catch (Exception ex)
         {
             Debug.WriteLine($"[MainVM] Decoder failed: {ex.Message}");
@@ -1343,6 +1352,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         BitmapSource? fallbackBitmap = null;
         if (processedBytes is null
             && incompleteScanMessage is null
+            && detectorMismatchMessage is null
             && _scanlines.Count > 0)
         {
             _log.Log($"Python decoder unavailable — building image from {_scanlines.Count} live scanlines");
@@ -1412,6 +1422,19 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                     ExposeCount++;
                     _toast.Show("Scan complete — ready for review", "success", 3000);
                     _log.Log($"Image displayed, {_lastImageBytes?.Length ?? 0} bytes, decoder={decoderUsed}");
+                }
+                else if (detectorMismatchMessage is not null)
+                {
+                    // The unit's detector geometry doesn't match the pipeline.
+                    // Fail loud (red) — NOT a retake; the raw bytes are saved so
+                    // the unit can be validated with tools/validate_unit.py.
+                    _lastImageBytes = rawBytes;
+                    MachineStatus = "Unsupported unit — detector mismatch (image withheld)";
+                    MachineIndicator = Brushes.Red;
+                    PhaseLabel = "";
+                    IsExposing = false;
+                    _toast.Show(detectorMismatchMessage, "error", 12000);
+                    _log.Log($"Detector mismatch: {detectorMismatchMessage}. Raw bytes saved ({rawBytes.Length})", "error");
                 }
                 else if (incompleteScanMessage is not null)
                 {
@@ -1548,10 +1571,14 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             }
             _lastTifSourcePath = null;
 
+            // Unit attribution — which fleet machine produced this scan.
+            var unitId = _config?.UnitId ?? Environment.MachineName;
+            var deviceHost = _config?.SironaHost;
+
             // 2. Save events log
             await _patientOutput.SaveEventsLogAsync(
                 patientDir, filePrefix, SelectedExamType,
-                ScanlineCount, KvPeak, exposeElapsed);
+                ScanlineCount, KvPeak, exposeElapsed, unitId, deviceHost);
             var eventsLogFile = $"{filePrefix}_events.log";
             _log.Log($"Events log saved: {eventsLogFile}");
 
@@ -1560,7 +1587,8 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                 patientDir, SelectedExamType, KvPeak, ScanlineCount,
                 panoFile is not null ? Path.GetFileName(panoFile) : null,
                 eventsLogFile,
-                LastDcmPath is not null ? Path.GetFileName(LastDcmPath) : null);
+                LastDcmPath is not null ? Path.GetFileName(LastDcmPath) : null,
+                unitId, deviceHost);
             _log.Log($"Session appended to sessions.json for patient {patientId}");
         }
         catch (Exception ex)

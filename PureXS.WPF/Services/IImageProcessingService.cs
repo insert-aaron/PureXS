@@ -21,6 +21,19 @@ public sealed class ScanIncompleteException : Exception
 }
 
 /// <summary>
+/// Thrown when the decoder refuses to reconstruct because the unit's detector
+/// geometry doesn't match the Orthophos XG the pipeline is calibrated for
+/// (e.g. a fleet machine with a different detector or firmware). Unlike a
+/// truncated scan this is NOT retakeable — it's a hardware/config fact — so the
+/// caller should surface it as a hard "unsupported unit" error and refuse to
+/// display an image rather than show a corrupted reconstruction.
+/// </summary>
+public sealed class DetectorMismatchException : Exception
+{
+    public DetectorMismatchException(string message) : base(message) { }
+}
+
+/// <summary>
 /// Processes raw Orthophos scan bytes into a finished PNG
 /// by calling the Python-based decoder (bundled as purexs_decoder.exe).
 /// </summary>

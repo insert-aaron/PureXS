@@ -15,6 +15,6 @@ public interface IPatientOutputService
     /// </summary>
     Task<string> SavePanoramicTifAsync(string patientDir, string filePrefix, string sourceTifPath, CancellationToken ct = default);
 
-    Task SaveEventsLogAsync(string patientDir, string filePrefix, string examType, int scanlines, double peakKv, double elapsed, CancellationToken ct = default);
-    Task AppendSessionAsync(string patientDir, string examType, double kvPeak, int scanlines, string? imageFile, string? eventsLog, string? dcmFile, CancellationToken ct = default);
+    Task SaveEventsLogAsync(string patientDir, string filePrefix, string examType, int scanlines, double peakKv, double elapsed, string? unitId = null, string? deviceHost = null, CancellationToken ct = default);
+    Task AppendSessionAsync(string patientDir, string examType, double kvPeak, int scanlines, string? imageFile, string? eventsLog, string? dcmFile, string? unitId = null, string? deviceHost = null, CancellationToken ct = default);
 }

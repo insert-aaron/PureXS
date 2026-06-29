@@ -58,6 +58,15 @@
                                 <Setter TargetName="border" Property="BorderBrush" Value="{DynamicResource DisabledBorder}" />
                                 <Setter Property="Foreground" Value="{DynamicResource DisabledText}" />
                             </Trigger>
+                            <!-- "In Session" reads as an intentional amber status
+                                 pill (active procedure), not a greyed-out button.
+                                 Wins over the IsEnabled=False grey above. -->
+                            <DataTrigger Binding="{Binding ExposeButtonText}" Value="In Session">
+                                <Setter TargetName="border" Property="Background" Value="{DynamicResource ToastWarning}" />
+                                <Setter TargetName="border" Property="BorderBrush" Value="{DynamicResource OrangeBtnBorder}" />
+                                <Setter Property="Foreground" Value="{DynamicResource TextOnAccent}" />
+                                <Setter Property="Cursor" Value="Arrow" />
+                            </DataTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -611,14 +620,14 @@
         <!-- ================================================================ -->
         <Grid Margin="6">
             <Grid.ColumnDefinitions>
-                <!-- Avatar Dock: 88px collapsed, 280px when search expanded -->
+                <!-- Avatar Dock: 88px collapsed, 340px when search expanded -->
                 <ColumnDefinition>
                     <ColumnDefinition.Style>
                         <Style TargetType="ColumnDefinition">
                             <Setter Property="Width" Value="88" />
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding IsSearchExpanded}" Value="True">
-                                    <Setter Property="Width" Value="280" />
+                                    <Setter Property="Width" Value="340" />
                                 </DataTrigger>
                                 <DataTrigger Binding="{Binding IsDockVisible}" Value="False">
                                     <Setter Property="Width" Value="0" />
@@ -627,12 +636,12 @@
                         </Style>
                     </ColumnDefinition.Style>
                 </ColumnDefinition>
-                <ColumnDefinition Width="340" />  <!-- Left Panel -->
+                <ColumnDefinition Width="400" />  <!-- Left Panel -->
                 <ColumnDefinition Width="*" />    <!-- Image Viewer -->
             </Grid.ColumnDefinitions>
 
             <!-- ============================================================ -->
-            <!-- Column 0: Avatar Dock (88px collapsed / 280px expanded)      -->
+            <!-- Column 0: Avatar Dock (88px collapsed / 340px expanded)      -->
             <!-- ============================================================ -->
             <Border Grid.Column="0"
                     Background="{DynamicResource PanelBg}"

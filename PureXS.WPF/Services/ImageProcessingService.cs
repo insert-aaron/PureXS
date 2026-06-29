@@ -145,10 +145,21 @@ public sealed class ImageProcessingService : IImageProcessingService
                 // that breaks reconstruction breaks the preview too.
                 if (proc.ExitCode == 2)
                 {
-                    var retake = ExtractIncompleteScanMessage(stderrText)
+                    var retake = ExtractDecoderMessage(stderrText, "INCOMPLETE_SCAN:")
                                  ?? "Scan incomplete — please retake.";
                     _log?.Log($"Decoder refused: {retake}", "warning");
                     throw new ScanIncompleteException(retake);
+                }
+
+                // Exit code 3: the unit's detector geometry doesn't match the
+                // Orthophos XG the pipeline targets. Not retakeable — fail loud
+                // with an "unsupported unit" error instead of a garbage image.
+                if (proc.ExitCode == 3)
+                {
+                    var mismatch = ExtractDecoderMessage(stderrText, "DETECTOR_MISMATCH:")
+                                   ?? "Unsupported detector geometry on this unit.";
+                    _log?.Log($"Decoder refused — detector mismatch: {mismatch}", "error");
+                    throw new DetectorMismatchException(mismatch);
                 }
 
                 var msg = $"Decoder exited with code {proc.ExitCode}. " +
@@ -193,16 +204,15 @@ public sealed class ImageProcessingService : IImageProcessingService
     }
 
     /// <summary>
-    /// Parses the operator-facing retake message out of the decoder's stderr
-    /// when it exited with EXIT_INCOMPLETE_SCAN (2). The CLI emits a line
-    /// like "ERROR INCOMPLETE_SCAN: Scan incomplete — N scanlines received,
-    /// expected ~2700. ...". Returns null if the marker isn't found, leaving
-    /// the caller to use a generic fallback message.
+    /// Parses an operator-facing message out of the decoder's stderr following a
+    /// known marker (e.g. "INCOMPLETE_SCAN:" for exit 2, "DETECTOR_MISMATCH:"
+    /// for exit 3). The CLI emits a line like "ERROR &lt;marker&gt; &lt;message&gt;".
+    /// Returns null if the marker isn't found, leaving the caller to use a
+    /// generic fallback message.
     /// </summary>
-    private static string? ExtractIncompleteScanMessage(string? stderr)
+    private static string? ExtractDecoderMessage(string? stderr, string marker)
     {
         if (string.IsNullOrEmpty(stderr)) return null;
-        const string marker = "INCOMPLETE_SCAN:";
         var idx = stderr.IndexOf(marker, StringComparison.Ordinal);
         if (idx < 0) return null;
         var tail = stderr[(idx + marker.Length)..].TrimStart();
