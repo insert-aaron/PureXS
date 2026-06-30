@@ -1329,6 +1329,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         // and optionally an uncompressed TIF copy when SaveTifExport is on.
         byte[]? processedBytes = null;
         _lastTifSourcePath = null;
+        int decodedColumns = 0;
         string? incompleteScanMessage = null;
         string? detectorMismatchMessage = null;
         try
@@ -1338,6 +1339,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             {
                 processedBytes = processed.PngBytes;
                 _lastTifSourcePath = processed.TifSourcePath;
+                decodedColumns = processed.Columns;  // real ~2700 scan length
             }
         }
         catch (ScanIncompleteException ex)
@@ -1427,9 +1429,15 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                     Brightness = 0;
                     Contrast = 1.0;
 
+                    // Report the REAL decoded column count (~2700), not the
+                    // sparse ~14-line live preview, so the status and the saved
+                    // events.log / sessions.json reflect the true scan length.
+                    if (decodedColumns > 0)
+                        ScanlineCount = decodedColumns;
+
                     IsReviewingImage = true;
                     MachineStatus = decoderUsed
-                        ? "Scan complete — review image"
+                        ? $"Scan complete — {ScanlineCount} lines"
                         : $"Scan complete — {_scanlines.Count} scanlines (basic reconstruction)";
                     MachineIndicator = new SolidColorBrush(Color.FromRgb(79, 195, 247));
                     ReviewStatus = "Review the image with the patient";

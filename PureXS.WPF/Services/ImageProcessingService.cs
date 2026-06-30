@@ -151,6 +151,18 @@ public sealed class ImageProcessingService : IImageProcessingService
                     throw new ScanIncompleteException(retake);
                 }
 
+                // Exit code 4: the pixel stream's column phase is broken (a
+                // telemetry/echo block was mis-stripped) — reshaping would fold
+                // the image into a tiled scan. Retakeable, so surface a retake
+                // prompt and suppress the scanline fallback (it would fold too).
+                if (proc.ExitCode == 4)
+                {
+                    var retake = ExtractDecoderMessage(stderrText, "MISALIGNED_SCAN:")
+                                 ?? "Scan data misaligned — please retake.";
+                    _log?.Log($"Decoder refused — misaligned scan: {retake}", "warning");
+                    throw new ScanIncompleteException(retake);
+                }
+
                 // Exit code 3: the unit's detector geometry doesn't match the
                 // Orthophos XG the pipeline targets. Not retakeable — fail loud
                 // with an "unsupported unit" error instead of a garbage image.
@@ -195,7 +207,11 @@ public sealed class ImageProcessingService : IImageProcessingService
                     "warning");
             }
 
-            return new ProcessedScan(pngBytes, tifSource);
+            // Real decoded column count (the true scan length), parsed from the
+            // decoder's "COLUMNS=<n>" line. Falls back to 0 if absent.
+            var columns = ParseColumns(stderrText);
+
+            return new ProcessedScan(pngBytes, tifSource, columns);
         }
         finally
         {
@@ -210,6 +226,17 @@ public sealed class ImageProcessingService : IImageProcessingService
     /// Returns null if the marker isn't found, leaving the caller to use a
     /// generic fallback message.
     /// </summary>
+    /// <summary>
+    /// Parses the decoder's "COLUMNS=&lt;n&gt;" line (the real decoded column
+    /// count) out of stderr. Returns 0 if not present.
+    /// </summary>
+    private static int ParseColumns(string? stderr)
+    {
+        if (string.IsNullOrEmpty(stderr)) return 0;
+        var m = System.Text.RegularExpressions.Regex.Match(stderr, @"COLUMNS=(\d+)");
+        return m.Success && int.TryParse(m.Groups[1].Value, out var n) ? n : 0;
+    }
+
     private static string? ExtractDecoderMessage(string? stderr, string marker)
     {
         if (string.IsNullOrEmpty(stderr)) return null;

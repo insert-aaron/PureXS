@@ -5,7 +5,12 @@ namespace PureXS.Services;
 /// and optionally the on-disk path of an uncompressed TIFF copy that the
 /// decoder produced when <c>SaveTifExport</c> was enabled.
 /// </summary>
-public sealed record ProcessedScan(byte[] PngBytes, string? TifSourcePath);
+/// <param name="Columns">Real decoded column count from the decoder (~2700 for
+/// a full panoramic), parsed from its "COLUMNS=" output. This is the true scan
+/// length — unlike the host's sparse ~14-line live preview count — so it's what
+/// the events.log / sessions.json and the "Scan complete — N lines" status use.
+/// 0 when the decoder didn't report it.</param>
+public sealed record ProcessedScan(byte[] PngBytes, string? TifSourcePath, int Columns = 0);
 
 /// <summary>
 /// Thrown when the decoder reports that the scan completed transport but
