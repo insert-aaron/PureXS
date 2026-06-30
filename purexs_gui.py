@@ -81,7 +81,7 @@ except ImportError:
 try:
     from purechart import (
         PureChartPatientLoader, PureChartPatient,
-        PureChartUploader, UploadResult, EXAM_TYPE_MAP,
+        PureChartUploader, UploadResult, EXAM_TYPE_MAP, SLOT_CODE_MAP,
     )
     HAS_PURECHART = True
 except ImportError:
@@ -1128,7 +1128,8 @@ class PureXSApp(ctk.CTk):
         host = getattr(self._sirona_client, "host", None) if self._sirona_client else None
         return unit_id, host
 
-    def _write_scan_telemetry(self, outcome: str, columns: int = 0) -> None:
+    def _write_scan_telemetry(self, outcome: str, columns: int = 0,
+                              sharpness: float = 0.0) -> None:
         """Append one line to <root>/logs/scan_telemetry.jsonl for every scan
         (success OR refused), tagged with the unit, so misalignment rate per
         machine = count(outcome="misaligned") / total. Best-effort."""
@@ -1144,6 +1145,8 @@ class PureXSApp(ctk.CTk):
                 "exam": self._patient.get("exam", ""),
                 "phase_err": int(getattr(_hb, "LAST_PHASE_ERR", 0)),
                 "columns": columns,
+                "sharpness": round(sharpness, 1),
+                "blurry": bool(sharpness and sharpness < _hb.SHARPNESS_WARN_THRESHOLD),
                 "outcome": outcome,
             }
             with open(log_dir / "scan_telemetry.jsonl", "a", encoding="utf-8") as f:
@@ -3124,6 +3127,8 @@ class PureXSApp(ctk.CTk):
                     "\u2622 EXPOSING \u2014 receiving data", "#FF6F00",
                     phase="Phase 2: exposure \u2014 X-ray active",
                 )
+                # Big "DO NOT MOVE" overlay \u2014 patients move thinking it's done.
+                self._show_expose_overlay()
                 Toast(self, "Expose button pressed \u2014 data incoming!",
                       level="info", duration_ms=2000)
                 # NOW start the hard timeout (data is flowing)
@@ -3610,6 +3615,32 @@ class PureXSApp(ctk.CTk):
         # Update canvas scroll region
         self._scanline_canvas.configure(scrollregion=(0, 0, canvas_w, canvas_h))
 
+    def _show_expose_overlay(self) -> None:
+        """Big 'DO NOT MOVE' overlay on the image canvas during the live scan.
+        Patients often move thinking the scan is done; this is a hard-to-miss
+        instruction to stay still / keep holding the EXPOSE button. Cleared
+        automatically when reconstruction replaces the canvas content."""
+        try:
+            self._canvas.delete("all")
+            cw = self._canvas.winfo_width()
+            ch = self._canvas.winfo_height()
+            if cw < 10:
+                cw, ch = 800, 500
+            self._canvas.create_rectangle(0, 0, cw, ch, fill="#0B1220", outline="")
+            self._canvas.create_text(cw // 2, ch // 2 - 70, text="☢",
+                                     fill="#FFB300", font=("Segoe UI", 64))
+            self._canvas.create_text(cw // 2, ch // 2, text="EXPOSING — DO NOT MOVE",
+                                     fill="#FFFFFF", font=("Segoe UI", 26, "bold"))
+            self._canvas.create_text(cw // 2, ch // 2 + 42,
+                                     text="Patient must stay perfectly still.",
+                                     fill="#FFE082", font=("Segoe UI", 16))
+            self._canvas.create_text(
+                cw // 2, ch // 2 + 78,
+                text="Keep holding the EXPOSE button until the unit stops.",
+                fill="#FFE082", font=("Segoe UI", 13), width=cw - 80, justify="center")
+        except Exception:
+            pass
+
     def _stitch_panoramic(self) -> None:
         """Auto-stitch scanlines into a full panoramic and display it."""
         if not HAS_HB_DECODER:
@@ -3754,7 +3785,14 @@ class PureXSApp(ctk.CTk):
             self._write_scan_telemetry("error")
             return
 
-        self._write_scan_telemetry("ok", columns=len(self._expose_scanlines))
+        import hb_decoder as _hb
+        sharp = _hb.image_sharpness(img)
+        self._write_scan_telemetry("ok", columns=len(self._expose_scanlines),
+                                   sharpness=sharp)
+        # Non-blocking blur advisory — never blocks the workflow.
+        if sharp and sharp < _hb.SHARPNESS_WARN_THRESHOLD:
+            Toast(self, "This scan looks blurry — review with the patient; "
+                  "consider a retake.", level="warning", duration_ms=8000)
         self._log(f"Panoramic stitched: {img.width}x{img.height}", "info")
         self._display_pil_image(img)
         self._save_pano_btn.configure(state="normal")
@@ -5215,19 +5253,19 @@ class PureXSApp(ctk.CTk):
 
         patient_id = self._selected_purechart.id
         exam_type = self._patient.get("exam", "Panoramic")
-        upload_type = EXAM_TYPE_MAP.get(exam_type, "xrays") if HAS_PURECHART else "xrays"
+        slot_code = SLOT_CODE_MAP.get(exam_type, "PAN") if HAS_PURECHART else "PAN"
         # Aligned with WPF: "Panoramic — Test, Philip — 2026-06-28"
         title = (f"{exam_type} — {self._patient['last']}, "
                  f"{self._patient['first']} — {datetime.now():%Y-%m-%d}")
 
         self._log(
             f"PureChart: uploading {pano_path.name} to patient {patient_id} "
-            f"(type={upload_type})",
+            f"(slot={slot_code})",
             "info",
         )
 
         # PHASE 5 — store args for retry and show upload UI
-        args = (patient_id, str(pano_path), upload_type, title)
+        args = (patient_id, str(pano_path), slot_code, title)
         self._last_upload_args = args
         self._phase5_show_uploading()
 
@@ -5240,14 +5278,14 @@ class PureXSApp(ctk.CTk):
     # PHASE 3
     def _phase3_upload_bg(
         self, patient_id: str, file_path: str,
-        upload_type: str, title: str,
+        slot_code: str, title: str,
     ) -> None:
         """Background thread: upload file to PureChart."""
         try:
             result = self._purechart_uploader.upload_file(
                 patient_id=patient_id,
                 file_path=file_path,
-                upload_type=upload_type,
+                slot_code=slot_code,
                 title=title,
             )
             self.after(0, self._phase3_upload_done, result)
@@ -5260,13 +5298,14 @@ class PureXSApp(ctk.CTk):
         if result.success:
             self._phase5_show_success(result)
             self._log(
-                f"PureChart upload OK: {result.filename} "
-                f"(attachment {result.attachment_id})",
+                f"PureChart upload OK: xrayId={result.attachment_id} "
+                f"duplicate={result.duplicate}",
                 "info",
             )
             Toast(
                 self,
-                f"X-ray uploaded to PureChart",
+                "X-ray already on PureChart" if result.duplicate
+                else "X-ray uploaded to PureChart",
                 level="success",
                 duration_ms=4000,
             )
@@ -5328,15 +5367,11 @@ class PureXSApp(ctk.CTk):
         self._upload_progress.stop()
         self._upload_progress.configure(mode="determinate")
         self._upload_progress.set(1.0)
-        self._upload_status_label.configure(
-            text=f"Uploaded ({result.size:,} bytes)",
-            text_color="#2E7D32",
-        )
+        status = "Already on PureChart" if getattr(result, "duplicate", False) \
+            else "Uploaded to PureChart"
+        self._upload_status_label.configure(text=status, text_color="#2E7D32")
         self._upload_retry_btn.pack_forget()
-        self._purechart_status.configure(
-            text=f"Uploaded to PureChart ({result.size:,} bytes)",
-            text_color="#2E7D32",
-        )
+        self._purechart_status.configure(text=status, text_color="#2E7D32")
         self._last_upload_args = ()  # clear — no retry needed
 
     # PHASE 5
@@ -5359,7 +5394,7 @@ class PureXSApp(ctk.CTk):
         if not self._last_upload_args:
             self._log("PureChart retry: no upload to retry", "warning")
             return
-        patient_id, file_path, upload_type, title = self._last_upload_args
+        patient_id, file_path, slot_code, title = self._last_upload_args
         if not Path(file_path).exists():
             self._phase5_show_failure("Retry failed: file no longer exists")
             self._log(f"PureChart retry failed: {file_path} not found", "error")

@@ -1661,17 +1661,31 @@
                         </Image.RenderTransform>
                     </Image>
 
-                    <!-- Scan progress overlay -->
-                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center"
-                                Visibility="{Binding IsScanInProgress, Converter={StaticResource BoolToVis}}">
-                        <TextBlock Text="&#xE8B8;" FontFamily="Segoe MDL2 Assets" FontSize="48"
-                                   Foreground="{DynamicResource ScanProgressFg}" HorizontalAlignment="Center" />
-                        <TextBlock Text="{Binding ScanProgressText}" Foreground="{DynamicResource ScanProgressFg}"
-                                   FontSize="16" HorizontalAlignment="Center" Margin="0,10,0,0" />
-                        <!-- Indeterminate progress bar -->
-                        <ProgressBar IsIndeterminate="True" Height="4" Width="200" Margin="0,10,0,0"
-                                     Foreground="{DynamicResource ScanProgressFg}" Background="{DynamicResource BorderPrimary}" />
-                    </StackPanel>
+                    <!-- ── Exposure "DO NOT MOVE" overlay ─────────────────────
+                         Covers the viewer during the actual scan. Patients
+                         often move thinking the scan is done — this is a hard-
+                         to-miss instruction to keep still / keep holding the
+                         physical EXPOSE button until the unit stops. -->
+                    <Border Visibility="{Binding IsScanInProgress, Converter={StaticResource BoolToVis}}"
+                            Background="#E60B1220">
+                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                            <TextBlock Text="&#x2622;" FontSize="72" Foreground="#FFB300"
+                                       HorizontalAlignment="Center" />
+                            <TextBlock Text="EXPOSING — DO NOT MOVE" FontSize="30" FontWeight="Bold"
+                                       Foreground="White" HorizontalAlignment="Center" Margin="0,14,0,0" />
+                            <TextBlock Text="Patient must stay perfectly still."
+                                       FontSize="19" Foreground="#FFE082"
+                                       HorizontalAlignment="Center" Margin="0,10,0,0" />
+                            <TextBlock Text="Keep holding the EXPOSE button until the unit stops moving."
+                                       FontSize="16" Foreground="#FFE082" TextWrapping="Wrap"
+                                       MaxWidth="520" TextAlignment="Center"
+                                       HorizontalAlignment="Center" Margin="0,6,0,0" />
+                            <TextBlock Text="{Binding ScanProgressText}" Foreground="#90CAF9"
+                                       FontSize="13" HorizontalAlignment="Center" Margin="0,18,0,0" />
+                            <ProgressBar IsIndeterminate="True" Height="6" Width="300" Margin="0,12,0,0"
+                                         Foreground="#FFB300" Background="#33FFFFFF" />
+                        </StackPanel>
+                    </Border>
 
                     <!-- Preview / Edit button overlay (top-right) -->
                     <Button Content="Preview / Edit"

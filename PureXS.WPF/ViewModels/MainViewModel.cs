@@ -171,7 +171,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
     [NotifyCanExecuteChangedFor(nameof(RetryUploadCommand))]
     private bool _isUploadFailed;
 
-    private (string patientId, byte[] fileBytes, string contentType, string uploadType, string title, string originalFilename)? _lastUploadArgs;
+    private (string patientId, byte[] fileBytes, string contentType, string slotCode, string originalFilename)? _lastUploadArgs;
 
     private Window? _historyWindow;
 
@@ -614,23 +614,20 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
 
         try
         {
-            var uploadType = ExamTypes.ToPureChartType(SelectedExamType);
-            // Aligned title + filename (identical format in the Python app):
-            //   title    "Panoramic — Test, Philip — 2026-06-28"
-            //   filename "Test_Philip_19760406_20260628_180207_panoramic.png"
-            var title = $"{SelectedExamType} — {SelectedPatient.LastName}, {SelectedPatient.FirstName} — {DateTime.Now:yyyy-MM-dd}";
+            var slotCode = ExamTypes.ToSlotCode(SelectedExamType);  // e.g. "PAN"
+            // Aligned filename (identical format in the Python app):
+            //   "Test_Philip_19760406_20260628_180207_panoramic.png"
             var examLabel = SelectedExamType.ToLowerInvariant().Replace(" ", "_");
             var fileName = $"{_patientOutput.GetFilePrefix(SelectedPatient.LastName, SelectedPatient.FirstName, SelectedPatient.Dob)}_{examLabel}.png";
 
             // Store args for retry
-            _lastUploadArgs = (SelectedPatient.Id, _lastImageBytes, "image/png", uploadType, title, fileName);
+            _lastUploadArgs = (SelectedPatient.Id, _lastImageBytes, "image/png", slotCode, fileName);
 
             var result = await _pureChart.UploadAsync(
                 SelectedPatient.Id,
                 _lastImageBytes,
                 "image/png",
-                uploadType,
-                title,
+                slotCode,
                 fileName,
                 CancellationToken.None);
 
@@ -639,10 +636,10 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                 IsUploadFailed = false;
                 _lastUploadArgs = null;
 
-                ReviewStatus = "Sent to PureChart";
+                ReviewStatus = result.Duplicate ? "Already on PureChart" : "Sent to PureChart";
                 ReviewStatusColor = new SolidColorBrush(Color.FromRgb(129, 199, 132)); // green
-                _toast.Show("Image uploaded to PureChart", "success", 3000);
-                _log.Log($"Upload success for patient {SelectedPatient?.Id}, type={uploadType}");
+                _toast.Show(result.Duplicate ? "Image already on PureChart" : "Image uploaded to PureChart", "success", 3000);
+                _log.Log($"Upload success for patient {SelectedPatient?.Id}, slot={slotCode}, xrayId={result.AttachmentId}, duplicate={result.Duplicate}");
 
                 // Brief pause so user sees the success message
                 await Task.Delay(1500);
@@ -694,8 +691,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                 args.patientId,
                 args.fileBytes,
                 args.contentType,
-                args.uploadType,
-                args.title,
+                args.slotCode,
                 args.originalFilename,
                 CancellationToken.None);
 
@@ -704,10 +700,10 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                 IsUploadFailed = false;
                 _lastUploadArgs = null;
 
-                ReviewStatus = "Sent to PureChart";
+                ReviewStatus = result.Duplicate ? "Already on PureChart" : "Sent to PureChart";
                 ReviewStatusColor = new SolidColorBrush(Color.FromRgb(129, 199, 132)); // green
-                _toast.Show("Image uploaded to PureChart", "success", 3000);
-                _log.Log($"Retry upload success for patient {args.patientId}, type={args.uploadType}");
+                _toast.Show(result.Duplicate ? "Image already on PureChart" : "Image uploaded to PureChart", "success", 3000);
+                _log.Log($"Retry upload success for patient {args.patientId}, slot={args.slotCode}, xrayId={result.AttachmentId}, duplicate={result.Duplicate}");
 
                 await Task.Delay(1500);
                 // Stay connected — clear the patient + image for the next scan
@@ -1433,6 +1429,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         byte[]? processedBytes = null;
         _lastTifSourcePath = null;
         int decodedColumns = 0;
+        bool scanBlurry = false;
         string? incompleteScanMessage = null;
         string? detectorMismatchMessage = null;
         try
@@ -1444,6 +1441,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                 _lastTifSourcePath = processed.TifSourcePath;
                 decodedColumns = processed.Columns;  // real ~2700 scan length
                 _lastScanPhaseErr = processed.PhaseErr;  // misalignment telemetry
+                scanBlurry = processed.IsBlurry;  // non-blocking blur advisory
             }
         }
         catch (ScanIncompleteException ex)
@@ -1550,6 +1548,10 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
 
                     ExposeCount++;
                     _toast.Show("Scan complete — ready for review", "success", 3000);
+                    // Non-blocking blur advisory — never blocks the workflow.
+                    if (scanBlurry)
+                        _toast.Show("This scan looks blurry — review with the patient; consider a retake (keep them still).",
+                                    "warning", 8000);
                     _log.Log($"Image displayed, {_lastImageBytes?.Length ?? 0} bytes, decoder={decoderUsed}");
                 }
                 else if (detectorMismatchMessage is not null)

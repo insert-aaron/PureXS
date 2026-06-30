@@ -10,6 +10,7 @@ Provides:
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import mimetypes
 from dataclasses import dataclass, field
@@ -180,6 +181,20 @@ EXAM_TYPE_MAP: Dict[str, str] = {
     "Periapical":         "periapical",
 }
 
+# Exam-type → xray-gateway metadata.slotCode mapping (free-form text; the
+# gateway stores it verbatim and titles the row "X-ray <slotCode>"). This is
+# OUR vocabulary and MUST match WPF's ExamTypes.ToSlotCode and whatever slot
+# codes the PureXR desktop app uses to place the image in the correct slot.
+SLOT_CODE_MAP: Dict[str, str] = {
+    "Panoramic":          "PAN",
+    "Ceph Lateral":       "CEPH-L",
+    "Ceph Frontal":       "CEPH-F",
+    "Bitewing Left":      "BW-L",
+    "Bitewing Right":     "BW-R",
+    "Bitewing Bilateral": "BW",
+    "Periapical":         "PA",
+}
+
 _CONTENT_TYPE_MAP: Dict[str, str] = {
     ".png":  "image/png",
     ".jpg":  "image/jpeg",
@@ -194,15 +209,15 @@ _CONTENT_TYPE_MAP: Dict[str, str] = {
 
 @dataclass
 class UploadResult:
-    """Parsed response from the upload-xray edge function."""
+    """Parsed response from the upload-xray edge function.
+
+    Success: ``{success:true, duplicate:bool, xrayId:uuid}``.
+    Failure: ``{success:false, error:"<msg>"}``.
+    """
 
     success: bool = False
-    file_url: str = ""
-    attachment_id: str = ""
-    patient_id: str = ""
-    filename: str = ""
-    upload_type: str = ""
-    size: int = 0
+    attachment_id: str = ""   # response field "xrayId"
+    duplicate: bool = False
     error: str = ""
     http_status: int = 0
 
@@ -226,10 +241,14 @@ class PureChartUploader:
         self,
         patient_id: str,
         file_path: str | Path,
-        upload_type: str = "xrays",
+        slot_code: str = "PAN",
         title: Optional[str] = None,
     ) -> UploadResult:
         """Upload a file to the patient's chart. Returns UploadResult.
+
+        ``slot_code`` is the xray-gateway ``metadata.slotCode`` (e.g. "PAN").
+        ``title`` is accepted for caller compatibility but the gateway derives
+        the row title from slotCode, so it is not sent.
 
         Raises on network errors — caller must handle.
         """
@@ -237,30 +256,33 @@ class PureChartUploader:
         file_bytes = path.read_bytes()
         b64 = base64.b64encode(file_bytes).decode("ascii")
 
-        ext = path.suffix.lower()
-        content_type = _CONTENT_TYPE_MAP.get(ext, "image/png")
-
-        payload: Dict[str, Any] = {
+        # xray-gateway/upload contract (purechart-app): JSON body
+        #   { file, filename, metadata }
+        # - file:     plain base64 of the image bytes (NO data: prefix), ≤10 MB
+        # - filename: derives content type server-side (.jpg/.jpeg→jpeg, else png)
+        # - metadata: a JSON string with patientId + slotCode + uploadType
+        # Facility is keyed off the x-api-key header, NOT the body.
+        metadata = json.dumps({
             "patientId": patient_id,
-            "base64Data": b64,
-            "contentType": content_type,
-            "type": upload_type,
-            "title": title or f"{upload_type} capture",
-            "originalFilename": path.name,
+            "slotCode": slot_code,     # chart slot code (e.g. "PAN")
+            "uploadType": "slot",      # "slot" (single image) | "composite"
+        })
+        payload: Dict[str, Any] = {
+            "file": b64,
+            "filename": path.name,
+            "metadata": metadata,
         }
 
         resp = self._session.post(_UPLOAD_URL, json=payload, timeout=60)
         data = resp.json() if resp.text else {}
 
+        # Success: { success:true, duplicate:bool, xrayId:uuid }
+        # Failure: { success:false, error:"<msg>" }
         result = UploadResult(
-            success=data.get("success", False),
-            file_url=data.get("fileUrl", ""),
-            attachment_id=data.get("attachmentId", ""),
-            patient_id=data.get("patientId", patient_id),
-            filename=data.get("filename", ""),
-            upload_type=data.get("type", upload_type),
-            size=data.get("size", 0),
-            error=data.get("error", "") or data.get("message", ""),
+            success=bool(data.get("success", False)),
+            attachment_id=data.get("xrayId", ""),
+            duplicate=bool(data.get("duplicate", False)),
+            error=data.get("error", ""),
             http_status=resp.status_code,
         )
 

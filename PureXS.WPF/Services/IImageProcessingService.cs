@@ -15,7 +15,11 @@ namespace PureXS.Services;
 /// Recorded per scan alongside unit_id so misalignment frequency can be tracked
 /// per machine. Small (~1-5) is healthy; large (e.g. 569) means the scan was
 /// misaligned/folded.</param>
-public sealed record ProcessedScan(byte[] PngBytes, string? TifSourcePath, int Columns = 0, int PhaseErr = 0);
+/// <param name="Sharpness">Variance-of-Laplacian focus metric from the decoder
+/// (higher = sharper). <paramref name="IsBlurry"/> is the decoder's verdict vs
+/// its threshold — used to toast a non-blocking "looks blurry, review/retake"
+/// advisory (never a reject; blur is usually patient motion/positioning).</param>
+public sealed record ProcessedScan(byte[] PngBytes, string? TifSourcePath, int Columns = 0, int PhaseErr = 0, double Sharpness = 0, bool IsBlurry = false);
 
 /// <summary>
 /// Thrown when the decoder reports that the scan completed transport but

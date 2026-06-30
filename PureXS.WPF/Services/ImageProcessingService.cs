@@ -135,7 +135,9 @@ public sealed class ImageProcessingService : IImageProcessingService
             // misalignment rate per machine can be computed from one place.
             var columns = ParseInt(stderrText, "COLUMNS");
             var phaseErr = ParseInt(stderrText, "PHASE_ERR");
-            WriteTelemetry(examType, columns, phaseErr, proc.ExitCode switch
+            var sharpness = ParseDouble(stderrText, "SHARPNESS");
+            var isBlurry = ParseInt(stderrText, "BLURRY") == 1;
+            WriteTelemetry(examType, columns, phaseErr, sharpness, isBlurry, proc.ExitCode switch
             {
                 0 => "ok",
                 2 => "incomplete",
@@ -221,9 +223,9 @@ public sealed class ImageProcessingService : IImageProcessingService
                     "warning");
             }
 
-            // columns / phaseErr were parsed above (for telemetry) and are
-            // reused here for the returned scan.
-            return new ProcessedScan(pngBytes, tifSource, columns, phaseErr);
+            // columns / phaseErr / sharpness were parsed above (for telemetry)
+            // and are reused here for the returned scan.
+            return new ProcessedScan(pngBytes, tifSource, columns, phaseErr, sharpness, isBlurry);
         }
         finally
         {
@@ -244,7 +246,7 @@ public sealed class ImageProcessingService : IImageProcessingService
     /// rate per machine = count(outcome="misaligned") / total. Best-effort —
     /// never throws into the scan flow.
     /// </summary>
-    private void WriteTelemetry(string examType, int columns, int phaseErr, string outcome)
+    private void WriteTelemetry(string examType, int columns, int phaseErr, double sharpness, bool isBlurry, string outcome)
     {
         try
         {
@@ -258,6 +260,8 @@ public sealed class ImageProcessingService : IImageProcessingService
                 exam = examType,
                 phase_err = phaseErr,
                 columns,
+                sharpness = Math.Round(sharpness, 1),
+                blurry = isBlurry,
                 outcome,
             });
             File.AppendAllText(Path.Combine(dir, "scan_telemetry.jsonl"), line + "\n");
@@ -277,6 +281,14 @@ public sealed class ImageProcessingService : IImageProcessingService
         if (string.IsNullOrEmpty(stderr)) return 0;
         var m = System.Text.RegularExpressions.Regex.Match(stderr, key + @"=(\d+)");
         return m.Success && int.TryParse(m.Groups[1].Value, out var n) ? n : 0;
+    }
+
+    private static double ParseDouble(string? stderr, string key)
+    {
+        if (string.IsNullOrEmpty(stderr)) return 0;
+        var m = System.Text.RegularExpressions.Regex.Match(stderr, key + @"=([\d.]+)");
+        return m.Success && double.TryParse(m.Groups[1].Value,
+            System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : 0;
     }
 
     private static string? ExtractDecoderMessage(string? stderr, string marker)

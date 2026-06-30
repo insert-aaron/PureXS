@@ -93,17 +93,26 @@ public sealed class PureChartService : IPureChartService, IDisposable
 
     public async Task<UploadResult> UploadAsync(
         string patientId, byte[] fileBytes, string contentType,
-        string uploadType, string title, string? originalFilename = null,
+        string slotCode, string? originalFilename = null,
         CancellationToken ct = default)
     {
-        var payload = new
+        // xray-gateway/upload contract (purechart-app): JSON body
+        //   { file, filename, metadata }
+        // - file:     plain base64 of the image bytes (NO data: prefix), ≤10 MB
+        // - filename: derives content type server-side (.jpg/.jpeg→jpeg, else png)
+        // - metadata: a JSON string with patientId + slotCode + uploadType
+        // Facility is keyed off the x-api-key header, NOT the body.
+        var metadata = JsonSerializer.Serialize(new
         {
             patientId,
-            base64Data = Convert.ToBase64String(fileBytes),
-            contentType,
-            type = uploadType,
-            title,
-            originalFilename,
+            slotCode,               // chart slot code (e.g. "PAN")
+            uploadType = "slot",    // "slot" (single image) | "composite"
+        });
+        var payload = new
+        {
+            file = Convert.ToBase64String(fileBytes),
+            filename = originalFilename ?? "scan.png",
+            metadata,
         };
 
         var response = await _http.PostAsJsonAsync(UploadUrl, payload, ct);
@@ -113,17 +122,14 @@ public sealed class PureChartService : IPureChartService, IDisposable
 
         if (!string.IsNullOrEmpty(json))
         {
+            // Success: { success:true, duplicate:bool, xrayId:uuid }
+            // Failure: { success:false, error:"<msg>" }
             using var doc = JsonDocument.Parse(json);
             var r = doc.RootElement;
             result.Success = r.GetBoolOrDefault("success");
-            result.FileUrl = r.GetStringOrDefault("fileUrl");
-            result.AttachmentId = r.GetStringOrDefault("attachmentId");
-            result.PatientId = r.GetStringOrDefault("patientId");
-            result.Filename = r.GetStringOrDefault("filename");
-            result.UploadType = r.GetStringOrDefault("type");
+            result.AttachmentId = r.GetStringOrDefault("xrayId");
+            result.Duplicate = r.GetBoolOrDefault("duplicate");
             result.Error = r.GetStringOrDefault("error");
-            if (string.IsNullOrEmpty(result.Error))
-                result.Error = r.GetStringOrDefault("message");
         }
 
         if (!response.IsSuccessStatusCode)
