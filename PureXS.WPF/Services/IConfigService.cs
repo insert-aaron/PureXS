@@ -1,3 +1,5 @@
+using PureXS.Models;
+
 namespace PureXS.Services;
 
 public interface IConfigService
@@ -5,6 +7,22 @@ public interface IConfigService
     string? FacilityToken { get; }
     void SaveFacilityToken(string token);
     string ConfigDirectory { get; }
+
+    /// <summary>
+    /// All configured PureChart facilities. A legacy single <c>facility_token</c>
+    /// is migrated into a one-entry list on load. Never null (may be empty).
+    /// </summary>
+    IReadOnlyList<FacilityConfig> Facilities { get; }
+
+    /// <summary>Index of the active facility within <see cref="Facilities"/>.</summary>
+    int ActiveFacilityIndex { get; }
+
+    /// <summary>Persist the full facilities list and which one is active. The
+    /// active facility's token is mirrored to <c>facility_token</c> for back-compat.</summary>
+    void SaveFacilities(IReadOnlyList<FacilityConfig> facilities, int activeIndex);
+
+    /// <summary>Change which configured facility is active (persists + mirrors token).</summary>
+    void SetActiveFacility(int index);
 
     /// <summary>Last-known Sirona device IP (persisted across launches).</summary>
     string? SironaHost { get; }

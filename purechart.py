@@ -80,6 +80,47 @@ def _parse_patient_list(data) -> List[PureChartPatient]:
     ]
 
 
+def fetch_facility_name(token: str, timeout: int = 10) -> str:
+    """Best-effort: ask the backend for the facility name behind ``token``.
+
+    The xray-gateway maps each token → facility server-side. If a backend
+    revision returns the facility's name in the /scheduled response (top-level
+    ``facility_name`` / ``facilityName``, or a ``facility`` object with a
+    ``name``), surface it so the UI can auto-label the toggle ("auto from
+    server"). Returns ``""`` when the backend exposes no name — the caller then
+    falls back to a token-suffix label the user can rename.
+
+    Raises on HTTP / network errors (a 401 means the token itself is bad), so
+    the caller can distinguish an invalid token from a merely missing name.
+    """
+    session = requests.Session()
+    session.headers.update({
+        "Authorization": f"Bearer {_ANON_KEY}",
+        "apikey": _ANON_KEY,
+        "x-api-key": token,
+        "Content-Type": "application/json",
+    })
+    resp = session.post(_SCHEDULED_URL, json={}, timeout=timeout)
+    resp.raise_for_status()
+    try:
+        data = resp.json()
+    except ValueError:
+        return ""
+    if isinstance(data, dict):
+        for key in ("facility_name", "facilityName"):
+            val = data.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        fac = data.get("facility")
+        if isinstance(fac, str) and fac.strip():
+            return fac.strip()
+        if isinstance(fac, dict):
+            name = fac.get("name") or fac.get("display_name")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+    return ""
+
+
 class PureChartPatientLoader:
     """Calls the PureChart xray-patient-search Supabase edge function.
 

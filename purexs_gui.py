@@ -574,6 +574,179 @@ class ImageEditWindow(ctk.CTkToplevel):
             Toast(self._parent, f"Saved: {Path(path).name}", level="info")
 
 
+class FacilitySettingsDialog(ctk.CTkToplevel):
+    """Add / edit / remove PureChart facilities and pick the active one.
+
+    Edits a working copy; nothing is persisted until Save, which writes the
+    list back to config, rebuilds the loader/uploader for the active facility,
+    refreshes the toolbar toggle, and reloads the patient dock.
+    """
+
+    def __init__(self, app: "PureXSApp") -> None:
+        super().__init__(app)
+        self._app = app
+        self.title("Facility Settings")
+        self.geometry("580x440")
+        self.transient(app)
+        self.configure(fg_color="#F8FAFC")
+
+        # Active facility tracked by a stable per-row id (survives reordering
+        # when rows are removed), not by list position.
+        self._next_rid = 0
+        self._active_rid = tk.IntVar(value=-1)
+        self._rows: list[dict] = []
+
+        ctk.CTkLabel(
+            self, text="PureChart Facilities",
+            font=ctk.CTkFont(size=16, weight="bold"), text_color="#0F172A",
+        ).pack(anchor="w", padx=16, pady=(14, 2))
+        ctk.CTkLabel(
+            self,
+            text="Each facility authenticates with its own PureChart x-api-key. "
+                 "The active facility's patients populate the dock. Leave a name "
+                 "blank to auto-fill it from the server.",
+            font=ctk.CTkFont(size=11), text_color="#64748B",
+            wraplength=540, justify="left",
+        ).pack(anchor="w", padx=16, pady=(0, 8))
+
+        head = ctk.CTkFrame(self, fg_color="transparent")
+        head.pack(fill="x", padx=16)
+        for txt, w in (("Active", 52), ("Name", 150), ("Token", 240), ("", 40)):
+            ctk.CTkLabel(
+                head, text=txt, width=w, anchor="w",
+                font=ctk.CTkFont(size=10, weight="bold"), text_color="#94A3B8",
+            ).pack(side="left", padx=2)
+
+        self._rows_frame = ctk.CTkScrollableFrame(
+            self, fg_color="#FFFFFF", height=190,
+        )
+        self._rows_frame.pack(fill="both", expand=True, padx=16, pady=(2, 6))
+
+        for i, fac in enumerate(app._facilities):
+            self._add_row(
+                fac.get("name", ""), fac.get("token", ""),
+                active=(i == app._active_facility_idx),
+            )
+        if self._active_rid.get() == -1 and self._rows:
+            self._active_rid.set(self._rows[0]["rid"])
+
+        btns = ctk.CTkFrame(self, fg_color="transparent")
+        btns.pack(fill="x", padx=16, pady=(0, 12))
+        ctk.CTkButton(
+            btns, text="+ Add Facility", width=130,
+            fg_color="#64748B", hover_color="#475569",
+            command=lambda: self._add_row("", ""),
+        ).pack(side="left")
+        self._status = ctk.CTkLabel(
+            btns, text="", font=ctk.CTkFont(size=11), text_color="#64748B",
+        )
+        self._status.pack(side="left", padx=10)
+        ctk.CTkButton(
+            btns, text="Save", width=90,
+            fg_color="#1D4ED8", hover_color="#1E40AF",
+            command=self._on_save,
+        ).pack(side="right")
+        ctk.CTkButton(
+            btns, text="Cancel", width=90,
+            fg_color="#E2E8F0", hover_color="#CBD5E1", text_color="#0F172A",
+            command=self.destroy,
+        ).pack(side="right", padx=(0, 6))
+
+        self.after(60, self._center_on_parent)
+
+    def _center_on_parent(self) -> None:
+        try:
+            self.update_idletasks()
+            px, py = self._app.winfo_rootx(), self._app.winfo_rooty()
+            pw, ph = self._app.winfo_width(), self._app.winfo_height()
+            w, h = self.winfo_width(), self.winfo_height()
+            self.geometry(f"+{px + (pw - w) // 2}+{py + (ph - h) // 2}")
+            self.lift()
+            self.focus()
+        except Exception:
+            pass
+
+    def _add_row(self, name: str = "", token: str = "", active: bool = False) -> None:
+        rid = self._next_rid
+        self._next_rid += 1
+        row = ctk.CTkFrame(self._rows_frame, fg_color="transparent")
+        row.pack(fill="x", pady=2)
+        ctk.CTkRadioButton(
+            row, text="", width=52, variable=self._active_rid, value=rid,
+            radiobutton_width=16, radiobutton_height=16,
+        ).pack(side="left", padx=(8, 2))
+        name_var = tk.StringVar(value=name)
+        ctk.CTkEntry(
+            row, textvariable=name_var, width=150,
+            placeholder_text="(auto from server)",
+            fg_color="#FFFFFF", text_color="#0F172A", border_color="#E2E8F0",
+        ).pack(side="left", padx=2)
+        token_var = tk.StringVar(value=token)
+        ctk.CTkEntry(
+            row, textvariable=token_var, width=240, show="•",
+            placeholder_text="facility x-api-key",
+            fg_color="#FFFFFF", text_color="#0F172A", border_color="#E2E8F0",
+        ).pack(side="left", padx=2)
+        ctk.CTkButton(
+            row, text="✕", width=28,
+            fg_color="#FEE2E2", hover_color="#FCA5A5", text_color="#B91C1C",
+            command=lambda r=row: self._remove_row(r),
+        ).pack(side="left", padx=2)
+        self._rows.append(
+            {"frame": row, "name": name_var, "token": token_var, "rid": rid}
+        )
+        if active:
+            self._active_rid.set(rid)
+
+    def _remove_row(self, frame: ctk.CTkFrame) -> None:
+        removed = next((r for r in self._rows if r["frame"] is frame), None)
+        if removed is None:
+            return
+        self._rows.remove(removed)
+        frame.destroy()
+        if self._active_rid.get() == removed["rid"]:
+            self._active_rid.set(self._rows[0]["rid"] if self._rows else -1)
+
+    def _on_save(self) -> None:
+        facilities: list[dict] = []
+        active_idx = 0
+        active_rid = self._active_rid.get()
+        for r in self._rows:
+            token = r["token"].get().strip()
+            if not token:
+                continue
+            name = r["name"].get().strip() or self._app._derive_facility_name(token)
+            if r["rid"] == active_rid:
+                active_idx = len(facilities)
+            facilities.append({"name": name, "token": token})
+
+        if not facilities:
+            self._status.configure(
+                text="Add at least one facility token.", text_color="#EF4444",
+            )
+            return
+
+        active_idx = max(0, min(active_idx, len(facilities) - 1))
+        app = self._app
+        app._facilities = facilities
+        app._active_facility_idx = active_idx
+        app._write_facilities(facilities, active_idx)
+        app._rebuild_purechart_clients()
+        app._token_reprompt_done = False
+        app._refresh_facility_menu()
+        app._log(
+            f"Facilities updated ({len(facilities)}); active → "
+            f"{facilities[active_idx]['name']}", "info",
+        )
+        # Reload the dock for the active facility + resolve any new names
+        app._purechart_search_var.set("")
+        app._clear_avatar_dock()
+        if HAS_PURECHART and app._purechart_loader:
+            app._purechart_run_search("")
+        app._resolve_facility_names_bg()
+        self.destroy()
+
+
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║  Main Application
 # ╚══════════════════════════════════════════════════════════════════════════════
@@ -630,7 +803,12 @@ class PureXSApp(ctk.CTk):
         # PHASE 1-3 — PureChart patient list, search & upload
         self._purechart_patients: list = []       # List[PureChartPatient]
         self._selected_purechart: object = None   # currently selected PureChartPatient
-        self._facility_token: str = self._load_facility_token()
+        # Multi-facility: a list of {"name","token"} dicts + active index. The
+        # active facility's token is mirrored to config "facility_token" for
+        # backward compat; legacy single-token configs auto-migrate on load.
+        self._facilities: list[dict] = self._load_facilities()
+        self._active_facility_idx: int = self._load_active_facility_index()
+        self._facility_token: str = self._active_token()
         # When True, _save_patient_outputs writes an uncompressed TIF copy
         # next to the panoramic PNG. Off by default to avoid ~3 MB/scan
         # disk cost; only on for facilities running Sidexis LUT calibration.
@@ -694,8 +872,12 @@ class PureXSApp(ctk.CTk):
         if HAS_PURECHART and self._purechart_loader:
             self.after(300, self._phase1_load_patients)
 
+        # Resolve real facility names from the server in the background
+        # ("auto from server") without blocking startup.
+        self.after(900, self._resolve_facility_names_bg)
+
     # ╔════════════════════════════════════════════════════════════════════════
-    # ║  Facility Token
+    # ║  Facilities (multi-facility token store)
     # ╚════════════════════════════════════════════════════════════════════════
 
     _CONFIG_FILE = "config.json"
@@ -703,43 +885,227 @@ class PureXSApp(ctk.CTk):
     def _get_config_path(self) -> Path:
         return get_data_dir() / self._CONFIG_FILE
 
-    def _load_facility_token(self) -> str:
-        """Load facility token from ~/.purexs/config.json, or prompt if missing."""
+    def _read_config(self) -> dict:
+        """Read config.json as a dict (empty dict if missing/corrupt)."""
         cfg_path = self._get_config_path()
         if cfg_path.exists():
             try:
-                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-                token = cfg.get("facility_token", "").strip()
-                if token:
-                    return token
+                return json.loads(cfg_path.read_text(encoding="utf-8"))
             except Exception:
                 pass
-        # No token found — prompt
-        return self._prompt_facility_token()
+        return {}
+
+    def _write_config(self, cfg: dict) -> None:
+        self._get_config_path().write_text(
+            json.dumps(cfg, indent=2), encoding="utf-8"
+        )
+
+    def _write_facilities(self, facilities: list[dict], active_idx: int) -> None:
+        """Persist the facilities list + active index, mirroring the active
+        token to the legacy ``facility_token`` field for backward compat."""
+        cfg = self._read_config()
+        cfg["facilities"] = facilities
+        if facilities:
+            active_idx = max(0, min(active_idx, len(facilities) - 1))
+            cfg["facility_token"] = facilities[active_idx].get("token", "")
+        else:
+            active_idx = 0
+            cfg["facility_token"] = ""
+        cfg["active_facility"] = active_idx
+        self._write_config(cfg)
+
+    def _load_facilities(self) -> list[dict]:
+        """Load configured facilities, migrating a legacy single token.
+
+        Schema: ``config["facilities"] = [{"name","token"}, ...]``. A legacy
+        ``facility_token`` becomes a one-entry list. On first launch (nothing
+        configured) prompts for a token and resolves its name from the server.
+        """
+        cfg = self._read_config()
+        raw = cfg.get("facilities")
+        if isinstance(raw, list):
+            clean = [
+                {
+                    "name": str(f.get("name", "")).strip(),
+                    "token": str(f.get("token", "")).strip(),
+                }
+                for f in raw
+                if isinstance(f, dict) and str(f.get("token", "")).strip()
+            ]
+            if clean:
+                return clean
+        # Legacy migration: single facility_token → one-entry list
+        legacy = str(cfg.get("facility_token", "")).strip()
+        if legacy:
+            facilities = [{"name": self._derive_facility_name(legacy), "token": legacy}]
+            self._write_facilities(facilities, 0)
+            return facilities
+        # First launch — prompt for a token
+        token = self._prompt_facility_token()
+        if not token:
+            return []
+        facilities = [{"name": self._derive_facility_name(token), "token": token}]
+        self._write_facilities(facilities, 0)
+        return facilities
+
+    def _load_active_facility_index(self) -> int:
+        cfg = self._read_config()
+        try:
+            idx = int(cfg.get("active_facility", 0))
+        except (TypeError, ValueError):
+            idx = 0
+        if not self._facilities:
+            return 0
+        return max(0, min(idx, len(self._facilities) - 1))
+
+    def _active_token(self) -> str:
+        if 0 <= self._active_facility_idx < len(self._facilities):
+            return self._facilities[self._active_facility_idx].get("token", "")
+        return ""
+
+    def _active_facility_name(self) -> str:
+        if 0 <= self._active_facility_idx < len(self._facilities):
+            return self._facilities[self._active_facility_idx].get("name") or "Unnamed"
+        return "No facility"
+
+    def _derive_facility_name(self, token: str) -> str:
+        """Fast placeholder name from the token suffix (no network — safe to call
+        during startup/migration). The real facility name is filled in
+        asynchronously by :meth:`_resolve_facility_names_bg` ("auto from server")
+        when the backend exposes one; the user can also rename in Settings."""
+        suffix = token[-4:] if len(token) >= 4 else token
+        return f"Facility {suffix}"
+
+    def _resolve_facility_names_bg(self) -> None:
+        """Kick a background thread that asks the server for the real facility
+        name behind each auto-named facility ("auto from server"). Non-blocking
+        so startup is never gated on the network."""
+        if not HAS_PURECHART or not self._facilities:
+            return
+        threading.Thread(target=self._resolve_names_worker, daemon=True).start()
+
+    def _resolve_names_worker(self) -> None:
+        try:
+            from purechart import fetch_facility_name
+        except Exception:
+            return
+        changed = False
+        for fac in self._facilities:
+            name = fac.get("name", "")
+            token = fac.get("token", "")
+            # Only auto-resolve placeholders we generated — never clobber a name
+            # the user typed in Settings.
+            if not token or (name and not name.startswith("Facility ")):
+                continue
+            try:
+                real = fetch_facility_name(token)
+            except Exception:
+                real = ""
+            if real and real != name:
+                fac["name"] = real
+                changed = True
+        if changed:
+            self.after(0, self._on_names_resolved)
+
+    def _on_names_resolved(self) -> None:
+        self._write_facilities(self._facilities, self._active_facility_idx)
+        self._refresh_facility_menu()
 
     def _prompt_facility_token(self) -> str:
-        """Show a dialog asking for the facility token. Saves to config on success."""
+        """Show a dialog asking for a facility token. Returns it (no save)."""
         dialog = ctk.CTkInputDialog(
             title="Facility Setup",
             text="Enter your PureChart facility token:",
         )
-        token = (dialog.get_input() or "").strip()
-        if not token:
-            return ""
-        self._save_facility_token(token)
-        return token
+        return (dialog.get_input() or "").strip()
 
     def _save_facility_token(self, token: str) -> None:
-        """Persist the facility token to ~/.purexs/config.json."""
-        cfg_path = self._get_config_path()
-        cfg: dict = {}
-        if cfg_path.exists():
-            try:
-                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-        cfg["facility_token"] = token
-        cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        """Update the ACTIVE facility's token and persist (legacy-named helper,
+        used by the 401 re-prompt path)."""
+        if self._facilities and 0 <= self._active_facility_idx < len(self._facilities):
+            self._facilities[self._active_facility_idx]["token"] = token
+        else:
+            self._facilities = [
+                {"name": self._derive_facility_name(token), "token": token}
+            ]
+            self._active_facility_idx = 0
+        self._write_facilities(self._facilities, self._active_facility_idx)
+
+    def _rebuild_purechart_clients(self) -> None:
+        """Rebuild the loader/uploader from the active facility's token."""
+        token = self._active_token()
+        self._facility_token = token
+        if HAS_PURECHART and token:
+            self._purechart_loader = PureChartPatientLoader(token)
+            self._purechart_uploader = PureChartUploader(token)
+        else:
+            self._purechart_loader = None
+            self._purechart_uploader = None
+
+    def _unique_facility_labels(self) -> list[str]:
+        """Facility names made unique for the toggle (dup names get a ``(n)``)."""
+        labels: list[str] = []
+        seen: dict[str, int] = {}
+        for f in self._facilities:
+            base = f.get("name") or "Unnamed"
+            if base in seen:
+                seen[base] += 1
+                base = f"{base} ({seen[base]})"
+            else:
+                seen[base] = 1
+            labels.append(base)
+        return labels
+
+    def _refresh_facility_menu(self) -> None:
+        """Sync the toolbar toggle's values + selection with the facility list."""
+        menu = getattr(self, "_facility_menu", None)
+        if menu is None:
+            return
+        labels = self._unique_facility_labels()
+        self._facility_label_to_idx = {lbl: i for i, lbl in enumerate(labels)}
+        menu.configure(values=labels or ["No facility"])
+        if 0 <= self._active_facility_idx < len(labels):
+            self._facility_var.set(labels[self._active_facility_idx])
+        else:
+            self._facility_var.set(labels[0] if labels else "No facility")
+
+    def _on_facility_selected(self, label: str) -> None:
+        """Toolbar toggle changed — switch the active facility."""
+        idx = getattr(self, "_facility_label_to_idx", {}).get(label)
+        if idx is None or idx == self._active_facility_idx:
+            return
+        self._switch_facility(idx)
+
+    def _switch_facility(self, idx: int) -> None:
+        """Make facility ``idx`` active: persist, rebuild clients, reload dock."""
+        if not (0 <= idx < len(self._facilities)):
+            return
+        self._active_facility_idx = idx
+        self._write_facilities(self._facilities, idx)
+        self._rebuild_purechart_clients()
+        self._token_reprompt_done = False  # each facility gets its own 401 reprompt
+        self._refresh_facility_menu()
+        self._log(
+            f"Switched facility → {self._facilities[idx].get('name')}", "info"
+        )
+        # Reload the patient dock for the newly active facility
+        self._purechart_search_var.set("")
+        self._clear_avatar_dock()
+        if HAS_PURECHART and self._purechart_loader:
+            self._purechart_run_search("")
+        else:
+            self._purechart_status.configure(
+                text="No facility token — open Settings", text_color="#64748B"
+            )
+
+    def _open_facility_settings(self) -> None:
+        """Open the facilities-management dialog (add/edit/remove/set-active)."""
+        existing = getattr(self, "_facility_settings_win", None)
+        if existing is not None and existing.winfo_exists():
+            existing.focus()
+            existing.lift()
+            return
+        self._facility_settings_win = FacilitySettingsDialog(self)
 
     def _unit_attribution(self) -> tuple[str, str | None]:
         """Return (unit_id, device_host) for stamping scans in a fleet.
@@ -795,12 +1161,13 @@ class PureXSApp(ctk.CTk):
         if self._token_reprompt_done or not HAS_PURECHART:
             return
         self._token_reprompt_done = True
-        token = self._prompt_facility_token()  # modal; saves to config on success
+        token = self._prompt_facility_token()
         if not token:
             return
-        self._facility_token = token
-        self._purechart_loader = PureChartPatientLoader(token)
-        self._purechart_uploader = PureChartUploader(token)
+        # Update the ACTIVE facility's token, persist, rebuild clients
+        self._save_facility_token(token)
+        self._rebuild_purechart_clients()
+        self._refresh_facility_menu()
         # Retry whatever we last attempted (defaults to the today's-patients load)
         self._purechart_run_search(self._purechart_last_query or "")
 
@@ -875,6 +1242,43 @@ class PureXSApp(ctk.CTk):
             state="normal" if HAS_HISTORY else "disabled",
         )
         self._history_btn.pack(side="left", padx=(12, 4))
+
+        # ── Facility switcher + settings ─────────────────────────────────────
+        labels = self._unique_facility_labels()
+        self._facility_label_to_idx = {lbl: i for i, lbl in enumerate(labels)}
+        active_label = (
+            labels[self._active_facility_idx]
+            if 0 <= self._active_facility_idx < len(labels)
+            else (labels[0] if labels else "No facility")
+        )
+        self._facility_var = ctk.StringVar(value=active_label)
+        self._facility_menu = ctk.CTkOptionMenu(
+            toolbar,
+            variable=self._facility_var,
+            values=labels or ["No facility"],
+            width=170,
+            command=self._on_facility_selected,
+            font=ctk.CTkFont(size=11),
+            fg_color="#1D4ED8",
+            button_color="#1E40AF",
+            button_hover_color="#1E3A8A",
+            dropdown_fg_color="#FFFFFF",
+            dropdown_text_color="#0F172A",
+            dropdown_hover_color="#DBEAFE",
+        )
+        self._facility_menu.pack(side="left", padx=(16, 4))
+
+        self._facility_settings_btn = ctk.CTkButton(
+            toolbar,
+            text="⚙",
+            width=32,
+            font=ctk.CTkFont(size=15),
+            command=self._open_facility_settings,
+            fg_color="#64748B",
+            hover_color="#475569",
+        )
+        self._facility_settings_btn.pack(side="left", padx=(0, 4))
+        _ToolTip(self._facility_settings_btn, "Facility settings")
 
         # ── API status indicator ─────────────────────────────────────────────
         self._api_dot = ctk.CTkLabel(

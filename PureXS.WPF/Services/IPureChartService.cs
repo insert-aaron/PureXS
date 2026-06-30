@@ -22,4 +22,12 @@ public interface IPureChartService
 
     /// <summary>Swap the facility token used for the x-api-key header (after a 401 re-prompt).</summary>
     void UpdateToken(string facilityToken);
+
+    /// <summary>
+    /// Best-effort "auto from server": ask the backend for the facility name
+    /// behind <paramref name="facilityToken"/>. Returns null when the backend
+    /// exposes no name (caller falls back to a token-suffix label). Throws on
+    /// auth/network errors so a bad token is distinguishable from a missing name.
+    /// </summary>
+    Task<string?> FetchFacilityNameAsync(string facilityToken, CancellationToken ct = default);
 }

@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using PureXS.Models;
 
 namespace PureXS.Services;
 
@@ -9,6 +10,8 @@ public class ConfigService : IConfigService
     private readonly string _configDir;
     private readonly string _configPath;
     private string? _facilityToken;
+    private List<FacilityConfig> _facilities = new();
+    private int _activeFacilityIndex;
     private string? _unitId;
     private string? _sironaHost;
     private int? _sironaPort;
@@ -30,6 +33,10 @@ public class ConfigService : IConfigService
 
     public string? FacilityToken => _facilityToken;
 
+    public IReadOnlyList<FacilityConfig> Facilities => _facilities;
+
+    public int ActiveFacilityIndex => _activeFacilityIndex;
+
     public string ConfigDirectory => _configDir;
 
     public string? UnitId => _unitId;
@@ -50,8 +57,57 @@ public class ConfigService : IConfigService
 
     public void SaveFacilityToken(string token)
     {
-        _facilityToken = token;
-        SaveField("facility_token", token);
+        // Back-compat path (used by the 401 re-prompt): update the ACTIVE
+        // facility's token, or seed a first facility if none exist.
+        if (_facilities.Count > 0
+            && _activeFacilityIndex >= 0
+            && _activeFacilityIndex < _facilities.Count)
+        {
+            _facilities[_activeFacilityIndex].Token = token;
+        }
+        else
+        {
+            _facilities = new List<FacilityConfig>
+            {
+                new() { Name = FacilityConfig.DerivePlaceholderName(token), Token = token },
+            };
+            _activeFacilityIndex = 0;
+        }
+        SaveFacilities(_facilities, _activeFacilityIndex);
+    }
+
+    public void SaveFacilities(IReadOnlyList<FacilityConfig> facilities, int activeIndex)
+    {
+        _facilities = facilities
+            .Where(f => !string.IsNullOrWhiteSpace(f.Token))
+            .Select(f => new FacilityConfig
+            {
+                Name = string.IsNullOrWhiteSpace(f.Name)
+                    ? FacilityConfig.DerivePlaceholderName(f.Token)
+                    : f.Name.Trim(),
+                Token = f.Token.Trim(),
+            })
+            .ToList();
+
+        _activeFacilityIndex = _facilities.Count == 0
+            ? 0
+            : Math.Clamp(activeIndex, 0, _facilities.Count - 1);
+        _facilityToken = _facilities.Count > 0 ? _facilities[_activeFacilityIndex].Token : null;
+
+        var root = LoadRoot();
+        var arr = new JsonArray();
+        foreach (var f in _facilities)
+            arr.Add(new JsonObject { ["name"] = f.Name, ["token"] = f.Token });
+        root["facilities"] = arr;
+        root["active_facility"] = _activeFacilityIndex;
+        root["facility_token"] = _facilityToken ?? "";
+        WriteRoot(root);
+    }
+
+    public void SetActiveFacility(int index)
+    {
+        if (_facilities.Count == 0) return;
+        SaveFacilities(_facilities, index);
     }
 
     public void SaveSironaEndpoint(string host, int port)
@@ -103,6 +159,7 @@ public class ConfigService : IConfigService
             var json = File.ReadAllText(_configPath);
             var root = JsonNode.Parse(json)?.AsObject();
             _facilityToken = root?["facility_token"]?.GetValue<string>();
+            LoadFacilities(root);
             _unitId = root?["unit_id"]?.GetValue<string>();
             _sironaHost = root?["sirona_host"]?.GetValue<string>();
             var portNode = root?["sirona_port"];
@@ -128,6 +185,52 @@ public class ConfigService : IConfigService
         catch
         {
             // Corrupt config — treat as empty
+        }
+    }
+
+    /// <summary>
+    /// Populate <see cref="_facilities"/> / <see cref="_activeFacilityIndex"/>
+    /// from config, migrating a legacy single <c>facility_token</c> into a
+    /// one-entry list when no <c>facilities</c> array is present.
+    /// </summary>
+    private void LoadFacilities(JsonObject? root)
+    {
+        _facilities = new List<FacilityConfig>();
+        _activeFacilityIndex = 0;
+
+        if (root?["facilities"] is JsonArray arr)
+        {
+            foreach (var node in arr)
+            {
+                var token = node?["token"]?.GetValue<string>()?.Trim();
+                if (string.IsNullOrWhiteSpace(token)) continue;
+                var name = node?["name"]?.GetValue<string>()?.Trim();
+                _facilities.Add(new FacilityConfig
+                {
+                    Name = string.IsNullOrWhiteSpace(name)
+                        ? FacilityConfig.DerivePlaceholderName(token)
+                        : name,
+                    Token = token,
+                });
+            }
+        }
+
+        if (_facilities.Count > 0)
+        {
+            var idxNode = root?["active_facility"];
+            if (idxNode is not null)
+                _activeFacilityIndex = Math.Clamp(idxNode.GetValue<int>(), 0, _facilities.Count - 1);
+            return;
+        }
+
+        // Legacy migration: single facility_token → one-entry list
+        if (!string.IsNullOrWhiteSpace(_facilityToken))
+        {
+            _facilities.Add(new FacilityConfig
+            {
+                Name = FacilityConfig.DerivePlaceholderName(_facilityToken),
+                Token = _facilityToken,
+            });
         }
     }
 }

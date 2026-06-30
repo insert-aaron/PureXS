@@ -158,6 +158,50 @@ public sealed class PureChartService : IPureChartService, IDisposable
         _http.DefaultRequestHeaders.Add("x-api-key", facilityToken);
     }
 
+    public async Task<string?> FetchFacilityNameAsync(string facilityToken, CancellationToken ct = default)
+    {
+        // One-off client with the probed token (the instance _http holds the
+        // *active* facility's token, which may differ from the one we resolve).
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        http.DefaultRequestHeaders.Add("Authorization", $"Bearer {AnonKey}");
+        http.DefaultRequestHeaders.Add("apikey", AnonKey);
+        http.DefaultRequestHeaders.Add("x-api-key", facilityToken);
+
+        var response = await http.PostAsJsonAsync(ScheduledUrl, new { }, ct);
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadAsStringAsync(ct);
+        if (string.IsNullOrWhiteSpace(json)) return null;
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        if (root.ValueKind != JsonValueKind.Object) return null;
+
+        foreach (var key in new[] { "facility_name", "facilityName" })
+        {
+            if (root.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String)
+            {
+                var s = v.GetString();
+                if (!string.IsNullOrWhiteSpace(s)) return s.Trim();
+            }
+        }
+        if (root.TryGetProperty("facility", out var fac))
+        {
+            if (fac.ValueKind == JsonValueKind.String)
+            {
+                var s = fac.GetString();
+                if (!string.IsNullOrWhiteSpace(s)) return s.Trim();
+            }
+            else if (fac.ValueKind == JsonValueKind.Object
+                     && fac.TryGetProperty("name", out var n)
+                     && n.ValueKind == JsonValueKind.String)
+            {
+                var s = n.GetString();
+                if (!string.IsNullOrWhiteSpace(s)) return s.Trim();
+            }
+        }
+        return null;
+    }
+
     public void Dispose() => _http.Dispose();
 }
 

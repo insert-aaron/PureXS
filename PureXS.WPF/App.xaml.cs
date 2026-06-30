@@ -48,17 +48,33 @@ public partial class App : Application
                 ? p
                 : config.SironaPort ?? 12837;
 
-            // Resolve facility token: env var > persisted config > first-launch prompt
-            var facilityToken = Environment.GetEnvironmentVariable("PURECHART_FACILITY_TOKEN")
-                ?? config.FacilityToken;
+            // Resolve facility token. Facilities (multi-facility toggle) come from
+            // config; an env var override (PURECHART_FACILITY_TOKEN) still wins for
+            // the initial service token. On first launch (no facilities) prompt and
+            // persist one so the toggle has an entry.
+            var envToken = Environment.GetEnvironmentVariable("PURECHART_FACILITY_TOKEN");
+            string facilityToken;
 
-            if (string.IsNullOrWhiteSpace(facilityToken))
+            if (config.Facilities.Count == 0)
             {
-                var dialog = new FacilityTokenDialog();
-                if (dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(dialog.Token))
+                var seed = !string.IsNullOrWhiteSpace(envToken) ? envToken : config.FacilityToken;
+                if (string.IsNullOrWhiteSpace(seed))
                 {
-                    facilityToken = dialog.Token;
-                    config.SaveFacilityToken(facilityToken);
+                    var dialog = new FacilityTokenDialog();
+                    if (dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(dialog.Token))
+                        seed = dialog.Token.Trim();
+                }
+
+                if (!string.IsNullOrWhiteSpace(seed))
+                {
+                    config.SaveFacilities(
+                        new[] { new PureXS.Models.FacilityConfig
+                        {
+                            Name = PureXS.Models.FacilityConfig.DerivePlaceholderName(seed),
+                            Token = seed,
+                        } },
+                        0);
+                    facilityToken = seed;
                 }
                 else
                 {
@@ -69,6 +85,11 @@ public partial class App : Application
                         MessageBoxImage.Warning);
                     facilityToken = string.Empty;
                 }
+            }
+            else
+            {
+                facilityToken = (!string.IsNullOrWhiteSpace(envToken) ? envToken : config.FacilityToken)
+                    ?? string.Empty;
             }
 
             IEventLogService log = new EventLogService();

@@ -268,6 +268,98 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
     private bool _isSearching;
     private bool _tokenRepromptDone;   // auto-prompt for a new token at most once/session
 
+    // ── Multi-facility toggle ────────────────────────────────────────────
+    /// <summary>Facilities shown in the toolbar toggle (each its own x-api-key).</summary>
+    public ObservableCollection<FacilityConfig> Facilities { get; } = [];
+
+    [ObservableProperty]
+    private FacilityConfig? _selectedFacility;
+
+    // Suppresses the switch side-effects while we (re)populate the collection.
+    private bool _suppressFacilitySwitch;
+
+    /// <summary>Toolbar toggle changed — make the picked facility active: persist,
+    /// swap the service token, and reload the dock for it.</summary>
+    partial void OnSelectedFacilityChanged(FacilityConfig? value)
+    {
+        if (_suppressFacilitySwitch || value is null) return;
+        var idx = Facilities.IndexOf(value);
+        if (idx < 0) return;
+
+        _config?.SetActiveFacility(idx);
+        _pureChart.UpdateToken(value.Token);
+        _tokenRepromptDone = false;   // each facility gets its own 401 reprompt
+        _log.Log($"Switched facility → {value.Name}");
+
+        PureChartSearchQuery = "";    // visually clear the search box
+        _ = RunSearchAsync("", CancellationToken.None);
+    }
+
+    [RelayCommand]
+    private void OpenFacilitySettings()
+    {
+        var dialog = new FacilitySettingsDialog(Facilities, SelectedFacility);
+        if (dialog.ShowDialog() != true) return;
+
+        var edited = dialog.ResultFacilities;
+        var activeIdx = dialog.ResultActiveIndex;
+        _config?.SaveFacilities(edited, activeIdx);
+
+        // Rebuild the bound collection from the persisted (cleaned) list.
+        var persisted = _config?.Facilities ?? edited;
+        var newActive = _config?.ActiveFacilityIndex ?? activeIdx;
+        ReloadFacilities(persisted, newActive);
+
+        if (SelectedFacility is not null)
+        {
+            _pureChart.UpdateToken(SelectedFacility.Token);
+            _tokenRepromptDone = false;
+            PureChartSearchQuery = "";
+            _ = RunSearchAsync("", CancellationToken.None);
+        }
+        _ = ResolveFacilityNamesAsync();
+    }
+
+    /// <summary>Repopulate <see cref="Facilities"/> + selection without firing the
+    /// switch side-effects (guarded).</summary>
+    private void ReloadFacilities(IReadOnlyList<FacilityConfig> facilities, int activeIndex)
+    {
+        _suppressFacilitySwitch = true;
+        Facilities.Clear();
+        foreach (var f in facilities)
+            Facilities.Add(new FacilityConfig { Name = f.Name, Token = f.Token });
+        SelectedFacility = (activeIndex >= 0 && activeIndex < Facilities.Count)
+            ? Facilities[activeIndex]
+            : Facilities.FirstOrDefault();
+        _suppressFacilitySwitch = false;
+    }
+
+    /// <summary>Background "auto from server": replace placeholder facility names
+    /// with the real ones the backend returns, then persist + refresh the toggle.</summary>
+    private async Task ResolveFacilityNamesAsync()
+    {
+        if (Facilities.Count == 0) return;
+        var changed = false;
+        foreach (var f in Facilities.ToList())
+        {
+            // Only auto-resolve placeholders we generated — never clobber a typed name.
+            if (string.IsNullOrWhiteSpace(f.Token)) continue;
+            if (!string.IsNullOrEmpty(f.Name) && !f.Name.StartsWith("Facility ")) continue;
+            try
+            {
+                var real = await _pureChart.FetchFacilityNameAsync(f.Token);
+                if (!string.IsNullOrWhiteSpace(real) && real != f.Name)
+                {
+                    f.Name = real;   // observable → toggle updates live
+                    changed = true;
+                }
+            }
+            catch { /* offline / no name field — keep the placeholder */ }
+        }
+        if (changed)
+            _config?.SaveFacilities(Facilities, Facilities.IndexOf(SelectedFacility ?? Facilities[0]));
+    }
+
     // ── Toast state ─────────────────────────────────────────────────────
     public ObservableCollection<ToastItem> ActiveToasts { get; } = [];
 
@@ -302,8 +394,13 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         _sirona.ExposeStarted += OnExposeStarted;
         _sirona.DiscoveryStatus += OnDiscoveryStatus;
 
+        // Populate the facility toggle from persisted config.
+        if (_config is not null)
+            ReloadFacilities(_config.Facilities, _config.ActiveFacilityIndex);
+
         _log.Log("PureXS application started");
         _ = LoadInitialPatientsAsync();
+        _ = ResolveFacilityNamesAsync();
     }
 
     private void OnToastRequested(object? sender, ToastItem item)
@@ -1038,8 +1135,10 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             return;
 
         var token = dialog.Token.Trim();
-        _config?.SaveFacilityToken(token);
+        _config?.SaveFacilityToken(token);   // updates the ACTIVE facility's token
         _pureChart.UpdateToken(token);
+        if (_config is not null)
+            ReloadFacilities(_config.Facilities, _config.ActiveFacilityIndex);
         await RunSearchAsync(lastQuery, ct);
     }
 
