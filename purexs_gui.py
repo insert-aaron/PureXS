@@ -3646,29 +3646,6 @@ class PureXSApp(ctk.CTk):
         if not HAS_HB_DECODER:
             return
 
-        # Misalignment gate — the column phase was broken (a telemetry/echo
-        # block was mis-stripped); reconstructing would FOLD the image into a
-        # tiled/wrapped mess. Refuse and surface a retake. Checked before the
-        # empty-scanlines return because misalignment leaves scanlines empty.
-        if getattr(self._sirona_client, "_scan_misaligned", False):
-            msg = ("Scan data misaligned — image would be corrupted. "
-                   "Please retake the scan.")
-            self._log(msg, "error")
-            self._canvas.delete("all")
-            cw = self._canvas.winfo_width()
-            ch = self._canvas.winfo_height()
-            if cw < 10:
-                cw, ch = 800, 500
-            self._canvas.create_text(
-                cw // 2, ch // 2,
-                text="SCAN MISALIGNED\n\n" + msg,
-                fill="#EF4444", font=("Helvetica", 14), justify="center",
-                width=cw - 40,
-            )
-            Toast(self, msg, level="error", duration_ms=10000)
-            self._write_scan_telemetry("misaligned")
-            return
-
         if not self._expose_scanlines:
             return
 

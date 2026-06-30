@@ -142,7 +142,6 @@ public sealed class ImageProcessingService : IImageProcessingService
                 0 => "ok",
                 2 => "incomplete",
                 3 => "detector_mismatch",
-                4 => "misaligned",
                 _ => "error",
             });
 
@@ -164,18 +163,6 @@ public sealed class ImageProcessingService : IImageProcessingService
                     var retake = ExtractDecoderMessage(stderrText, "INCOMPLETE_SCAN:")
                                  ?? "Scan incomplete — please retake.";
                     _log?.Log($"Decoder refused: {retake}", "warning");
-                    throw new ScanIncompleteException(retake);
-                }
-
-                // Exit code 4: the pixel stream's column phase is broken (a
-                // telemetry/echo block was mis-stripped) — reshaping would fold
-                // the image into a tiled scan. Retakeable, so surface a retake
-                // prompt and suppress the scanline fallback (it would fold too).
-                if (proc.ExitCode == 4)
-                {
-                    var retake = ExtractDecoderMessage(stderrText, "MISALIGNED_SCAN:")
-                                 ?? "Scan data misaligned — please retake.";
-                    _log?.Log($"Decoder refused — misaligned scan: {retake}", "warning");
                     throw new ScanIncompleteException(retake);
                 }
 
