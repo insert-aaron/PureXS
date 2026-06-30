@@ -80,7 +80,7 @@ public class PatientOutputService : IPatientOutputService
         return filePath;
     }
 
-    public async Task SaveEventsLogAsync(string patientDir, string filePrefix, string examType, int scanlines, double peakKv, double elapsed, string? unitId = null, string? deviceHost = null, CancellationToken ct = default)
+    public async Task SaveEventsLogAsync(string patientDir, string filePrefix, string examType, int scanlines, double peakKv, double elapsed, string? unitId = null, string? deviceHost = null, int phaseErr = 0, CancellationToken ct = default)
     {
         var filename = $"{filePrefix}_events.log";
         var filePath = Path.Combine(patientDir, filename);
@@ -92,6 +92,7 @@ public class PatientOutputService : IPatientOutputService
         sb.AppendLine($"Unit:         {unitId ?? "unknown"}  ({deviceHost ?? "?"})");
         sb.AppendLine($"Exam Type:    {examType}");
         sb.AppendLine($"Scanlines:    {scanlines}");
+        sb.AppendLine($"Phase err:    {phaseErr} px");
         sb.AppendLine($"Peak kV:      {peakKv:F1}");
         sb.AppendLine($"Elapsed:      {elapsed:F2}s");
         sb.AppendLine("==========================");
@@ -107,7 +108,7 @@ public class PatientOutputService : IPatientOutputService
         }
     }
 
-    public async Task AppendSessionAsync(string patientDir, string examType, double kvPeak, int scanlines, string? imageFile, string? eventsLog, string? dcmFile, string? unitId = null, string? deviceHost = null, CancellationToken ct = default)
+    public async Task AppendSessionAsync(string patientDir, string examType, double kvPeak, int scanlines, string? imageFile, string? eventsLog, string? dcmFile, string? unitId = null, string? deviceHost = null, int phaseErr = 0, CancellationToken ct = default)
     {
         var sessionsPath = Path.Combine(patientDir, "sessions.json");
 
@@ -135,6 +136,7 @@ public class PatientOutputService : IPatientOutputService
                 Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
                 UnitId = unitId,
                 DeviceHost = deviceHost,
+                PhaseErr = phaseErr,
                 ExamType = examType,
                 KvPeak = kvPeak,
                 Scanlines = scanlines,

@@ -34,6 +34,11 @@ public class SessionEntry
     [JsonPropertyName("scanlines")]
     public int Scanlines { get; set; }
 
+    // Column-phase error (px) for this scan — misalignment telemetry, paired
+    // with UnitId so frequency can be tracked per machine. ~1-5 = healthy.
+    [JsonPropertyName("phase_err")]
+    public int PhaseErr { get; set; }
+
     [JsonPropertyName("image_file")]
     public string? ImageFile { get; set; }
 

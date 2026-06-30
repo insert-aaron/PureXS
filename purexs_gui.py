@@ -762,6 +762,29 @@ class PureXSApp(ctk.CTk):
         host = getattr(self._sirona_client, "host", None) if self._sirona_client else None
         return unit_id, host
 
+    def _write_scan_telemetry(self, outcome: str, columns: int = 0) -> None:
+        """Append one line to <root>/logs/scan_telemetry.jsonl for every scan
+        (success OR refused), tagged with the unit, so misalignment rate per
+        machine = count(outcome="misaligned") / total. Best-effort."""
+        try:
+            import hb_decoder as _hb
+            unit_id, device_host = self._unit_attribution()
+            log_dir = get_data_dir().parent / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            entry = {
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "unit_id": unit_id,
+                "device_host": device_host,
+                "exam": self._patient.get("exam", ""),
+                "phase_err": int(getattr(_hb, "LAST_PHASE_ERR", 0)),
+                "columns": columns,
+                "outcome": outcome,
+            }
+            with open(log_dir / "scan_telemetry.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry) + "\n")
+        except Exception as exc:
+            log.debug("scan telemetry write failed: %s", exc)
+
     def _handle_token_rejected(self) -> None:
         """A PureChart call returned 401 (invalid/disabled token).
 
@@ -3208,6 +3231,7 @@ class PureXSApp(ctk.CTk):
                 width=cw - 40,
             )
             Toast(self, msg, level="error", duration_ms=10000)
+            self._write_scan_telemetry("misaligned")
             return
 
         if not self._expose_scanlines:
@@ -3238,6 +3262,7 @@ class PureXSApp(ctk.CTk):
                 width=cw - 40,
             )
             Toast(self, geo_msg, level="error", duration_ms=12000)
+            self._write_scan_telemetry("detector_mismatch")
             return
 
         ok, retake_msg = check_scan_completeness(self._expose_scanlines, exam)
@@ -3255,6 +3280,7 @@ class PureXSApp(ctk.CTk):
                 width=cw - 40,
             )
             Toast(self, retake_msg, level="warning")
+            self._write_scan_telemetry("incomplete")
             return
 
         # Show loading state on canvas
@@ -3316,12 +3342,15 @@ class PureXSApp(ctk.CTk):
                 fill="#EF5350", font=("Helvetica", 14), justify="center",
             )
             Toast(self, f"Image processing failed: {error}", level="error")
+            self._write_scan_telemetry("error")
             return
 
         if img is None:
             self._log("Panoramic stitch failed — no valid scanlines", "warning")
+            self._write_scan_telemetry("error")
             return
 
+        self._write_scan_telemetry("ok", columns=len(self._expose_scanlines))
         self._log(f"Panoramic stitched: {img.width}x{img.height}", "info")
         self._display_pil_image(img)
         self._save_pano_btn.configure(state="normal")
@@ -3990,6 +4019,10 @@ class PureXSApp(ctk.CTk):
 
         # Unit attribution — which fleet machine produced this scan.
         unit_id, device_host = self._unit_attribution()
+        # Column-phase error of this scan (misalignment telemetry), paired with
+        # unit_id so frequency can be tracked per machine.
+        import hb_decoder as _hb
+        phase_err = int(getattr(_hb, "LAST_PHASE_ERR", 0))
 
         # 2. Save events log for this expose
         events_filename = f"{prefix}_events.log"
@@ -4005,6 +4038,7 @@ class PureXSApp(ctk.CTk):
                 f.write(f"Exam: {p['exam']}\n")
                 f.write(f"Timestamp: {ts}\n")
                 f.write(f"Scanlines: {sl_count}\n")
+                f.write(f"Phase err: {phase_err} px\n")
                 f.write(f"Peak kV: {self._expose_kv_peak:.1f}\n")
                 f.write(f"Elapsed: {elapsed:.1f}s\n")
         except Exception as exc:
@@ -4023,6 +4057,7 @@ class PureXSApp(ctk.CTk):
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "unit_id": unit_id,
             "device_host": device_host,
+            "phase_err": phase_err,
             "exam_type": self._patient.get("exam", ""),
             "kv_peak": round(self._expose_kv_peak, 1),
             "scanlines": sl_count,

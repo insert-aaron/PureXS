@@ -130,6 +130,20 @@ public sealed class ImageProcessingService : IImageProcessingService
             if (!string.IsNullOrWhiteSpace(stderrText))
                 Debug.WriteLine($"[ImageProcessing] stderr: {stderrText}");
 
+            // Per-scan fleet telemetry — one line per scan (success OR refused)
+            // in <root>\logs\scan_telemetry.jsonl, attributed to the unit, so the
+            // misalignment rate per machine can be computed from one place.
+            var columns = ParseInt(stderrText, "COLUMNS");
+            var phaseErr = ParseInt(stderrText, "PHASE_ERR");
+            WriteTelemetry(examType, columns, phaseErr, proc.ExitCode switch
+            {
+                0 => "ok",
+                2 => "incomplete",
+                3 => "detector_mismatch",
+                4 => "misaligned",
+                _ => "error",
+            });
+
             if (proc.ExitCode != 0)
             {
                 // Tail of stderr usually contains the Python traceback's last
@@ -207,11 +221,9 @@ public sealed class ImageProcessingService : IImageProcessingService
                     "warning");
             }
 
-            // Real decoded column count (the true scan length), parsed from the
-            // decoder's "COLUMNS=<n>" line. Falls back to 0 if absent.
-            var columns = ParseColumns(stderrText);
-
-            return new ProcessedScan(pngBytes, tifSource, columns);
+            // columns / phaseErr were parsed above (for telemetry) and are
+            // reused here for the returned scan.
+            return new ProcessedScan(pngBytes, tifSource, columns, phaseErr);
         }
         finally
         {
@@ -227,13 +239,43 @@ public sealed class ImageProcessingService : IImageProcessingService
     /// generic fallback message.
     /// </summary>
     /// <summary>
-    /// Parses the decoder's "COLUMNS=&lt;n&gt;" line (the real decoded column
-    /// count) out of stderr. Returns 0 if not present.
+    /// Appends one JSON line to <c>&lt;root&gt;\logs\scan_telemetry.jsonl</c> for
+    /// every scan (success or refused), tagged with the unit, so misalignment
+    /// rate per machine = count(outcome="misaligned") / total. Best-effort —
+    /// never throws into the scan flow.
     /// </summary>
-    private static int ParseColumns(string? stderr)
+    private void WriteTelemetry(string examType, int columns, int phaseErr, string outcome)
+    {
+        try
+        {
+            var dir = PureXSDataPaths.Logs;
+            Directory.CreateDirectory(dir);
+            var line = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                ts = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss"),
+                unit_id = _config?.UnitId ?? Environment.MachineName,
+                device_host = _config?.SironaHost,
+                exam = examType,
+                phase_err = phaseErr,
+                columns,
+                outcome,
+            });
+            File.AppendAllText(Path.Combine(dir, "scan_telemetry.jsonl"), line + "\n");
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[ImageProcessing] telemetry write failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Parses an integer the decoder emitted as "&lt;key&gt;=&lt;n&gt;" on stderr
+    /// (e.g. COLUMNS, PHASE_ERR). Returns 0 if not present.
+    /// </summary>
+    private static int ParseInt(string? stderr, string key)
     {
         if (string.IsNullOrEmpty(stderr)) return 0;
-        var m = System.Text.RegularExpressions.Regex.Match(stderr, @"COLUMNS=(\d+)");
+        var m = System.Text.RegularExpressions.Regex.Match(stderr, key + @"=(\d+)");
         return m.Success && int.TryParse(m.Groups[1].Value, out var n) ? n : 0;
     }
 

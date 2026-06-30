@@ -177,6 +177,10 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private byte[]? _lastImageBytes;
 
+    // Column-phase error (px) of the last decoded scan — misalignment telemetry
+    // written to the events.log / sessions.json alongside the unit id.
+    private int _lastScanPhaseErr;
+
     // Path of an uncompressed TIF copy of the last scan, in the decoder's
     // temp dir. Set only when SaveTifExport config is on. SavePatientOutputAsync
     // copies it next to the panoramic PNG and clears the field.
@@ -1340,6 +1344,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                 processedBytes = processed.PngBytes;
                 _lastTifSourcePath = processed.TifSourcePath;
                 decodedColumns = processed.Columns;  // real ~2700 scan length
+                _lastScanPhaseErr = processed.PhaseErr;  // misalignment telemetry
             }
         }
         catch (ScanIncompleteException ex)
@@ -1603,7 +1608,8 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             // 2. Save events log
             await _patientOutput.SaveEventsLogAsync(
                 patientDir, filePrefix, SelectedExamType,
-                ScanlineCount, KvPeak, exposeElapsed, unitId, deviceHost);
+                ScanlineCount, KvPeak, exposeElapsed, unitId, deviceHost,
+                _lastScanPhaseErr);
             var eventsLogFile = $"{filePrefix}_events.log";
             _log.Log($"Events log saved: {eventsLogFile}");
 
@@ -1613,7 +1619,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                 panoFile is not null ? Path.GetFileName(panoFile) : null,
                 eventsLogFile,
                 LastDcmPath is not null ? Path.GetFileName(LastDcmPath) : null,
-                unitId, deviceHost);
+                unitId, deviceHost, _lastScanPhaseErr);
             _log.Log($"Session appended to sessions.json for patient {patientId}");
         }
         catch (Exception ex)

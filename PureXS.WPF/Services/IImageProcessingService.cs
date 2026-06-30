@@ -10,7 +10,12 @@ namespace PureXS.Services;
 /// length — unlike the host's sparse ~14-line live preview count — so it's what
 /// the events.log / sessions.json and the "Scan complete — N lines" status use.
 /// 0 when the decoder didn't report it.</param>
-public sealed record ProcessedScan(byte[] PngBytes, string? TifSourcePath, int Columns = 0);
+/// <param name="PhaseErr">Column-phase error in px (distance of the pixel-stream
+/// start from a column boundary), parsed from the decoder's "PHASE_ERR=" line.
+/// Recorded per scan alongside unit_id so misalignment frequency can be tracked
+/// per machine. Small (~1-5) is healthy; large (e.g. 569) means the scan was
+/// misaligned/folded.</param>
+public sealed record ProcessedScan(byte[] PngBytes, string? TifSourcePath, int Columns = 0, int PhaseErr = 0);
 
 /// <summary>
 /// Thrown when the decoder reports that the scan completed transport but
