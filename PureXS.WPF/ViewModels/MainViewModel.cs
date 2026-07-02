@@ -1434,7 +1434,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         string? detectorMismatchMessage = null;
         try
         {
-            var processed = await _imageProcessor.ProcessRawScanAsync(rawBytes, SelectedExamType);
+            var processed = await _imageProcessor.ProcessRawScanAsync(rawBytes, SelectedExamType, _sirona.LastExposureEndReason);
             if (processed is not null)
             {
                 processedBytes = processed.PngBytes;

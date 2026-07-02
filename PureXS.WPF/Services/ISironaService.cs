@@ -35,6 +35,17 @@ public interface ISironaService : IAsyncDisposable
     /// <summary>Current connection state.</summary>
     ConnectionState State { get; }
 
+    /// <summary>
+    /// How the most recent exposure ended, set by CompleteExposure:
+    /// "idle-timeout-2s" (pixel stream went quiet while the link was up — the
+    /// beam stopped, i.e. the operator most likely released the EXPOSE button
+    /// early), "connection-closed" / "reader-error: ..." (the TCP link dropped
+    /// mid-scan — a network/cable problem), or "hard-watchdog-90s". Used to
+    /// tell an early button release apart from a link drop when a scan comes
+    /// back short. Null before the first exposure completes.
+    /// </summary>
+    string? LastExposureEndReason { get; }
+
     /// <summary>Connect to the Sirona unit and start the heartbeat loop.</summary>
     Task ConnectAsync(CancellationToken ct = default);
 

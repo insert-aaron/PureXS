@@ -3692,7 +3692,13 @@ class PureXSApp(ctk.CTk):
                 width=cw - 40,
             )
             Toast(self, retake_msg, level="warning")
-            self._write_scan_telemetry("incomplete")
+            # Reaching this gate means the pixel stream ended while the device
+            # was still connected (SCAN_COMPLETE fired via the 2s idle timeout);
+            # a true link drop mid-scan fires on_error and never gets here. A
+            # short scan with the link still up = the beam stopped early, i.e.
+            # the EXPOSE button was almost certainly released before the sweep
+            # finished. Record it distinctly from a connection loss.
+            self._write_scan_telemetry("early_release")
             return
 
         # Show loading state on canvas

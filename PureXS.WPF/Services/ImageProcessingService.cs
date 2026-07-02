@@ -37,7 +37,7 @@ public sealed class ImageProcessingService : IImageProcessingService
     }
 
     /// <inheritdoc />
-    public async Task<ProcessedScan?> ProcessRawScanAsync(byte[] rawBytes, string examType = "Panoramic", CancellationToken ct = default)
+    public async Task<ProcessedScan?> ProcessRawScanAsync(byte[] rawBytes, string examType = "Panoramic", string? endReason = null, CancellationToken ct = default)
     {
         if (_pythonPath is null)
         {
@@ -137,10 +137,19 @@ public sealed class ImageProcessingService : IImageProcessingService
             var phaseErr = ParseInt(stderrText, "PHASE_ERR");
             var sharpness = ParseDouble(stderrText, "SHARPNESS");
             var isBlurry = ParseInt(stderrText, "BLURRY") == 1;
+
+            // A short scan (exit 2) has two very different causes. Tell them
+            // apart from how the exposure ended: a dropped TCP link mid-sweep is
+            // a network/cable fault ("connection-closed"/"reader-error"), while
+            // the stream simply going quiet with the link still up means the
+            // beam stopped — almost always the EXPOSE button released early.
+            var linkDropped = endReason is not null &&
+                (endReason.StartsWith("connection-closed", StringComparison.OrdinalIgnoreCase)
+                 || endReason.StartsWith("reader-error", StringComparison.OrdinalIgnoreCase));
             WriteTelemetry(examType, columns, phaseErr, sharpness, isBlurry, proc.ExitCode switch
             {
                 0 => "ok",
-                2 => "incomplete",
+                2 => linkDropped ? "incomplete_link" : "early_release",
                 3 => "detector_mismatch",
                 _ => "error",
             });
@@ -154,15 +163,22 @@ public sealed class ImageProcessingService : IImageProcessingService
                 if (tail.Length > 240) tail = "..." + tail[^240..];
 
                 // Exit code 2 means the decoder refused to reconstruct because
-                // the scan was truncated (device aborted mid-sweep). Surface a
-                // retake prompt instead of the generic decoder-failed warning,
-                // and skip the scanline-preview fallback — the same shortfall
-                // that breaks reconstruction breaks the preview too.
+                // the scan was too short. Surface a retake prompt instead of the
+                // generic decoder-failed warning, and skip the scanline-preview
+                // fallback — the same shortfall that breaks reconstruction breaks
+                // the preview too. Give the operator the RIGHT corrective action:
+                // a link drop → check the network; otherwise → hold the button.
                 if (proc.ExitCode == 2)
                 {
-                    var retake = ExtractDecoderMessage(stderrText, "INCOMPLETE_SCAN:")
-                                 ?? "Scan incomplete — please retake.";
-                    _log?.Log($"Decoder refused: {retake}", "warning");
+                    string retake;
+                    if (linkDropped)
+                        retake = "Connection to the unit dropped mid-scan, so the sweep was cut short. "
+                                 + "Check the network/cable to the unit, then retake the scan.";
+                    else
+                        retake = ExtractDecoderMessage(stderrText, "INCOMPLETE_SCAN:")
+                                 ?? "Scan ended early — keep holding the EXPOSE button until the unit "
+                                    + "stops moving, then retake.";
+                    _log?.Log($"Decoder refused ({(linkDropped ? "link-drop" : "early-release")}): {retake}", "warning");
                     throw new ScanIncompleteException(retake);
                 }
 

@@ -60,6 +60,10 @@ public interface IImageProcessingService
     /// </summary>
     /// <param name="rawBytes">Raw scan bytes from the TCP stream.</param>
     /// <param name="examType">Exam type for pipeline routing ("Panoramic", "Ceph Lateral", "Ceph Frontal").</param>
+    /// <param name="endReason">How the exposure ended (SironaService.LastExposureEndReason).
+    /// Used to tell an early EXPOSE-button release ("idle-timeout-2s" — beam stopped
+    /// while connected) apart from a mid-scan link drop ("connection-closed" /
+    /// "reader-error") when a scan comes back too short to reconstruct.</param>
     /// <param name="ct">Cancellation token.</param>
-    Task<ProcessedScan?> ProcessRawScanAsync(byte[] rawBytes, string examType = "Panoramic", CancellationToken ct = default);
+    Task<ProcessedScan?> ProcessRawScanAsync(byte[] rawBytes, string examType = "Panoramic", string? endReason = null, CancellationToken ct = default);
 }

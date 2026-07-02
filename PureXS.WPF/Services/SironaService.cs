@@ -112,6 +112,8 @@ public sealed class SironaService : ISironaService
     /// <inheritdoc />
     public ConnectionState State => _state;
 
+    public string? LastExposureEndReason { get; private set; }
+
     public SironaService(
         string host = "192.168.139.170",
         int port = 12837,
@@ -796,6 +798,7 @@ public sealed class SironaService : ISironaService
         _session.IsExposing = false;
         _session.IsPostScanDisconnect = true;
         _armed = false;
+        LastExposureEndReason = reason;
 
         // Send IMAGE_ACK (best effort, matches Python behavior)
         try { _ = SendSessionFrameAsync(FC_IMAGE_ACK); }
