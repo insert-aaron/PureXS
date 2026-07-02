@@ -1129,7 +1129,8 @@ class PureXSApp(ctk.CTk):
         return unit_id, host
 
     def _write_scan_telemetry(self, outcome: str, columns: int = 0,
-                              sharpness: float = 0.0) -> None:
+                              sharpness: float = 0.0,
+                              blur_pattern: str = "") -> None:
         """Append one line to <root>/logs/scan_telemetry.jsonl for every scan
         (success OR refused), tagged with the unit, so misalignment rate per
         machine = count(outcome="misaligned") / total. Best-effort."""
@@ -1147,6 +1148,7 @@ class PureXSApp(ctk.CTk):
                 "columns": columns,
                 "sharpness": round(sharpness, 1),
                 "blurry": bool(sharpness and sharpness < _hb.SHARPNESS_WARN_THRESHOLD),
+                "blur_pattern": blur_pattern,
                 "outcome": outcome,
             }
             with open(log_dir / "scan_telemetry.jsonl", "a", encoding="utf-8") as f:
@@ -3769,13 +3771,14 @@ class PureXSApp(ctk.CTk):
             return
 
         import hb_decoder as _hb
-        sharp = _hb.image_sharpness(img)
+        sharp, blurry, pattern, hint = _hb.analyze_blur(img)
         self._write_scan_telemetry("ok", columns=len(self._expose_scanlines),
-                                   sharpness=sharp)
-        # Non-blocking blur advisory — never blocks the workflow.
-        if sharp and sharp < _hb.SHARPNESS_WARN_THRESHOLD:
-            Toast(self, "This scan looks blurry — review with the patient; "
-                  "consider a retake.", level="warning", duration_ms=8000)
+                                   sharpness=sharp, blur_pattern=pattern)
+        # Non-blocking blur advisory — never blocks the workflow. The hint is
+        # targeted: "positioning" (anterior out of focal trough → check bite
+        # peg) vs "motion" (uniform blur → patient moved).
+        if blurry and hint:
+            Toast(self, hint, level="warning", duration_ms=8000)
         self._log(f"Panoramic stitched: {img.width}x{img.height}", "info")
         self._display_pil_image(img)
         self._save_pano_btn.configure(state="normal")

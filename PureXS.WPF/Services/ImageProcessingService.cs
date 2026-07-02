@@ -137,6 +137,7 @@ public sealed class ImageProcessingService : IImageProcessingService
             var phaseErr = ParseInt(stderrText, "PHASE_ERR");
             var sharpness = ParseDouble(stderrText, "SHARPNESS");
             var isBlurry = ParseInt(stderrText, "BLURRY") == 1;
+            var blurPattern = ExtractDecoderMessage(stderrText, "BLUR_PATTERN=") ?? "";
 
             // A short scan (exit 2) has two very different causes. Tell them
             // apart from how the exposure ended: a dropped TCP link mid-sweep is
@@ -146,7 +147,7 @@ public sealed class ImageProcessingService : IImageProcessingService
             var linkDropped = endReason is not null &&
                 (endReason.StartsWith("connection-closed", StringComparison.OrdinalIgnoreCase)
                  || endReason.StartsWith("reader-error", StringComparison.OrdinalIgnoreCase));
-            WriteTelemetry(examType, columns, phaseErr, sharpness, isBlurry, proc.ExitCode switch
+            WriteTelemetry(examType, columns, phaseErr, sharpness, isBlurry, blurPattern, proc.ExitCode switch
             {
                 0 => "ok",
                 2 => linkDropped ? "incomplete_link" : "early_release",
@@ -228,7 +229,7 @@ public sealed class ImageProcessingService : IImageProcessingService
 
             // columns / phaseErr / sharpness were parsed above (for telemetry)
             // and are reused here for the returned scan.
-            return new ProcessedScan(pngBytes, tifSource, columns, phaseErr, sharpness, isBlurry);
+            return new ProcessedScan(pngBytes, tifSource, columns, phaseErr, sharpness, isBlurry, blurPattern);
         }
         finally
         {
@@ -249,7 +250,7 @@ public sealed class ImageProcessingService : IImageProcessingService
     /// rate per machine = count(outcome="misaligned") / total. Best-effort —
     /// never throws into the scan flow.
     /// </summary>
-    private void WriteTelemetry(string examType, int columns, int phaseErr, double sharpness, bool isBlurry, string outcome)
+    private void WriteTelemetry(string examType, int columns, int phaseErr, double sharpness, bool isBlurry, string blurPattern, string outcome)
     {
         try
         {
@@ -265,6 +266,7 @@ public sealed class ImageProcessingService : IImageProcessingService
                 columns,
                 sharpness = Math.Round(sharpness, 1),
                 blurry = isBlurry,
+                blur_pattern = blurPattern,
                 outcome,
             });
             File.AppendAllText(Path.Combine(dir, "scan_telemetry.jsonl"), line + "\n");

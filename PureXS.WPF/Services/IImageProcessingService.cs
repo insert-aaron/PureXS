@@ -19,7 +19,11 @@ namespace PureXS.Services;
 /// (higher = sharper). <paramref name="IsBlurry"/> is the decoder's verdict vs
 /// its threshold — used to toast a non-blocking "looks blurry, review/retake"
 /// advisory (never a reject; blur is usually patient motion/positioning).</param>
-public sealed record ProcessedScan(byte[] PngBytes, string? TifSourcePath, int Columns = 0, int PhaseErr = 0, double Sharpness = 0, bool IsBlurry = false);
+/// <param name="BlurPattern">When <paramref name="IsBlurry"/>, where the blur
+/// is: "positioning" (anterior/front-teeth out of the focal trough → check the
+/// bite peg) or "motion" (uniform blur → patient moved). "" or "sharp"
+/// otherwise. Drives a targeted operator hint instead of a generic blur toast.</param>
+public sealed record ProcessedScan(byte[] PngBytes, string? TifSourcePath, int Columns = 0, int PhaseErr = 0, double Sharpness = 0, bool IsBlurry = false, string BlurPattern = "");
 
 /// <summary>
 /// Thrown when the decoder reports that the scan completed transport but

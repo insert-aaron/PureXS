@@ -1430,6 +1430,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         _lastTifSourcePath = null;
         int decodedColumns = 0;
         bool scanBlurry = false;
+        string blurPattern = "";
         string? incompleteScanMessage = null;
         string? detectorMismatchMessage = null;
         try
@@ -1442,6 +1443,7 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                 decodedColumns = processed.Columns;  // real ~2700 scan length
                 _lastScanPhaseErr = processed.PhaseErr;  // misalignment telemetry
                 scanBlurry = processed.IsBlurry;  // non-blocking blur advisory
+                blurPattern = processed.BlurPattern;  // "positioning" | "motion"
             }
         }
         catch (ScanIncompleteException ex)
@@ -1549,9 +1551,10 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
                     ExposeCount++;
                     _toast.Show("Scan complete — ready for review", "success", 3000);
                     // Non-blocking blur advisory — never blocks the workflow.
+                    // Targeted by where the blur is: anterior-only → positioning
+                    // (focal trough / bite peg); uniform → patient motion.
                     if (scanBlurry)
-                        _toast.Show("This scan looks blurry — review with the patient; consider a retake (keep them still).",
-                                    "warning", 8000);
+                        _toast.Show(BlurHint(blurPattern), "warning", 8000);
                     _log.Log($"Image displayed, {_lastImageBytes?.Length ?? 0} bytes, decoder={decoderUsed}");
                 }
                 else if (detectorMismatchMessage is not null)
@@ -1781,6 +1784,18 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             });
         }
     }
+
+    /// <summary>
+    /// Targeted blur advisory text for the decoder's BLUR_PATTERN token. Mirrors
+    /// hb_decoder.BLUR_HINT_* so both apps say the same thing.
+    /// </summary>
+    private static string BlurHint(string pattern) => pattern switch
+    {
+        "positioning" => "Front teeth look blurry — check patient positioning and bite-peg "
+                         + "placement (the anterior is out of the focal trough). Consider a retake.",
+        _ => "Scan looks blurry across the arch — likely patient movement during the "
+             + "sweep. Keep the patient still and consider a retake.",
+    };
 
     private static string ParseDobToDicom(string dob)
     {
