@@ -27,6 +27,10 @@ public sealed class ImageProcessingService : IImageProcessingService
     private readonly IEventLogService? _log;
     private readonly IConfigService? _config;
 
+    // Phase-err (px) above which a reconstructed scan's raw bytes are kept aside
+    // for future fold-detector calibration. Matches hb_decoder.SUSPECTED_FOLD_PHASE_ERR.
+    private const int SuspectedFoldPhaseErr = 40;
+
     public ImageProcessingService(IEventLogService? log = null, IConfigService? config = null)
     {
         var appDir = AppContext.BaseDirectory;
@@ -208,6 +212,14 @@ public sealed class ImageProcessingService : IImageProcessingService
                 return null;
             }
 
+            // Reconstruction succeeded. If it was unusually off-phase, silently
+            // keep the raw bytes for future fold-detector calibration (NOT a gate
+            // — the image is shown/uploaded normally). Temp rotates, so this is
+            // the only way a real fold survives to be studied. Mirrors
+            // hb_decoder.preserve_suspected_fold / SUSPECTED_FOLD_PHASE_ERR.
+            if (phaseErr > SuspectedFoldPhaseErr)
+                PreserveSuspectedFold(rawPath, phaseErr);
+
             if (!File.Exists(outPath))
             {
                 const string msg = "Decoder finished cleanly but produced no PNG. " +
@@ -338,6 +350,31 @@ public sealed class ImageProcessingService : IImageProcessingService
             }
         }
         catch { }
+    }
+
+    /// <summary>
+    /// Silently copy an off-phase scan's raw bytes into &lt;root&gt;\logs\suspected_folds
+    /// for future fold-detector calibration. Never gates or alters the shown/
+    /// uploaded image. Keeps the most recent 20. Best-effort.
+    /// </summary>
+    private void PreserveSuspectedFold(string rawPath, int phaseErr)
+    {
+        try
+        {
+            if (!File.Exists(rawPath)) return;
+            var dir = Path.Combine(PureXSDataPaths.Logs, "suspected_folds");
+            Directory.CreateDirectory(dir);
+            var unit = _config?.UnitId ?? Environment.MachineName;
+            var safeUnit = new string((unit ?? "unit").Where(c => char.IsLetterOrDigit(c) || c is '-' or '_').ToArray());
+            if (string.IsNullOrEmpty(safeUnit)) safeUnit = "unit";
+            var dst = Path.Combine(dir, $"fold_{safeUnit}_{DateTime.Now:yyyyMMdd_HHmmss}_pe{phaseErr}.bin");
+            File.Copy(rawPath, dst, overwrite: true);
+
+            var stale = new DirectoryInfo(dir).GetFiles("fold_*.bin")
+                .OrderByDescending(f => f.LastWriteTimeUtc).Skip(20);
+            foreach (var f in stale) { try { f.Delete(); } catch { } }
+        }
+        catch { /* best effort — never affects the scan */ }
     }
 
     private static string appDir => AppContext.BaseDirectory;

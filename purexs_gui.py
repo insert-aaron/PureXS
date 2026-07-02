@@ -3783,6 +3783,15 @@ class PureXSApp(ctk.CTk):
         self._write_scan_telemetry("ok", columns=len(self._expose_scanlines),
                                    sharpness=sharp, blur_pattern=pattern,
                                    positioning=pos)
+        # Silently keep off-phase scans' raw bytes for future fold-detector
+        # calibration (NOT a gate — the image is shown normally). Temp rotates,
+        # so this is the only way a real fold survives to be studied later.
+        _pe = int(getattr(_hb, "LAST_PHASE_ERR", 0))
+        if _pe > _hb.SUSPECTED_FOLD_PHASE_ERR:
+            unit_id, _ = self._unit_attribution()
+            _hb.preserve_suspected_fold(
+                _hb.LOG_DIR / "last_scan_raw.bin", _pe,
+                get_data_dir().parent / "logs" / "suspected_folds", unit_id)
         # Non-blocking blur advisory — never blocks the workflow. The hint is
         # targeted: "positioning" (anterior out of focal trough → check bite
         # peg) vs "motion" (uniform blur → patient moved).
