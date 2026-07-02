@@ -709,21 +709,26 @@ public sealed class SironaService : ISironaService
 
                 var data = buffer[..bytesRead];
 
-                // Check for post-scan disconnect marker: E7 14 02
-                if (ContainsSequence(data, PostScanDisconnect))
+                // Post-scan disconnect marker (E7 14 02 = ERR_SIDEXIS_API).
+                //
+                // Only act on it OUTSIDE an active exposure. During the pixel
+                // sweep we deliberately do NOT complete on this 3-byte match:
+                // it is a raw byte scan over a 64 KB chunk, so it can collide
+                // with pixel data and PREMATURELY TRUNCATE a good scan (the
+                // device delivers ~2700 columns; a mid-stream false match would
+                // cut it to a fragment). The Python client — proven across
+                // facilities — never checks for this mid-stream; it ends the
+                // sweep purely on the 2s idle timeout / connection close. WPF
+                // now matches: an active sweep ends only via idle-timeout-2s,
+                // connection-closed, or the 90s hard watchdog. A genuine early
+                // device abort still surfaces (the stream goes idle → complete →
+                // the completeness gate refuses the short scan and prompts a
+                // retake), but a stray pixel collision can no longer end it.
+                if (!_session.IsExposing && ContainsSequence(data, PostScanDisconnect))
                 {
                     _session.IsPostScanDisconnect = true;
                     _armed = false;
-
-                    if (_session.IsExposing)
-                    {
-                        Debug.WriteLine($"[Sirona] PostScanDisconnect marker found — completing exposure with {_session.ImageBuffer.Count} bytes");
-                        CompleteExposure("post-scan-marker");
-                    }
-                    else
-                    {
-                        _ = ReconnectAsync();
-                    }
+                    _ = ReconnectAsync();
                     return;
                 }
 
