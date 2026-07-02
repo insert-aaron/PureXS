@@ -138,6 +138,12 @@ public sealed class ImageProcessingService : IImageProcessingService
             var sharpness = ParseDouble(stderrText, "SHARPNESS");
             var isBlurry = ParseInt(stderrText, "BLURRY") == 1;
             var blurPattern = ExtractDecoderMessage(stderrText, "BLUR_PATTERN=") ?? "";
+            // Positioning proxies — silent telemetry only (Phase 1). No operator
+            // UI; logged so thresholds can be calibrated from fleet data.
+            var posCurv = ParseDouble(stderrText, "POS_CURV");
+            var posTilt = ParseDouble(stderrText, "POS_TILT");
+            var posSym = ParseDouble(stderrText, "POS_SYM");
+            var posMid = ParseDouble(stderrText, "POS_MID");
 
             // A short scan (exit 2) has two very different causes. Tell them
             // apart from how the exposure ended: a dropped TCP link mid-sweep is
@@ -147,7 +153,8 @@ public sealed class ImageProcessingService : IImageProcessingService
             var linkDropped = endReason is not null &&
                 (endReason.StartsWith("connection-closed", StringComparison.OrdinalIgnoreCase)
                  || endReason.StartsWith("reader-error", StringComparison.OrdinalIgnoreCase));
-            WriteTelemetry(examType, columns, phaseErr, sharpness, isBlurry, blurPattern, proc.ExitCode switch
+            WriteTelemetry(examType, columns, phaseErr, sharpness, isBlurry, blurPattern,
+                posCurv, posTilt, posSym, posMid, proc.ExitCode switch
             {
                 0 => "ok",
                 2 => linkDropped ? "incomplete_link" : "early_release",
@@ -250,7 +257,8 @@ public sealed class ImageProcessingService : IImageProcessingService
     /// rate per machine = count(outcome="misaligned") / total. Best-effort —
     /// never throws into the scan flow.
     /// </summary>
-    private void WriteTelemetry(string examType, int columns, int phaseErr, double sharpness, bool isBlurry, string blurPattern, string outcome)
+    private void WriteTelemetry(string examType, int columns, int phaseErr, double sharpness, bool isBlurry, string blurPattern,
+        double posCurv, double posTilt, double posSym, double posMid, string outcome)
     {
         try
         {
@@ -267,6 +275,10 @@ public sealed class ImageProcessingService : IImageProcessingService
                 sharpness = Math.Round(sharpness, 1),
                 blurry = isBlurry,
                 blur_pattern = blurPattern,
+                occ_curvature = posCurv,
+                occ_tilt = posTilt,
+                lr_symmetry = posSym,
+                midline_offset = posMid,
                 outcome,
             });
             File.AppendAllText(Path.Combine(dir, "scan_telemetry.jsonl"), line + "\n");
@@ -291,7 +303,7 @@ public sealed class ImageProcessingService : IImageProcessingService
     private static double ParseDouble(string? stderr, string key)
     {
         if (string.IsNullOrEmpty(stderr)) return 0;
-        var m = System.Text.RegularExpressions.Regex.Match(stderr, key + @"=([\d.]+)");
+        var m = System.Text.RegularExpressions.Regex.Match(stderr, key + @"=(-?[\d.]+)");
         return m.Success && double.TryParse(m.Groups[1].Value,
             System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : 0;
     }

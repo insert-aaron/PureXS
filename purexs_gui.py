@@ -1130,7 +1130,8 @@ class PureXSApp(ctk.CTk):
 
     def _write_scan_telemetry(self, outcome: str, columns: int = 0,
                               sharpness: float = 0.0,
-                              blur_pattern: str = "") -> None:
+                              blur_pattern: str = "",
+                              positioning: dict | None = None) -> None:
         """Append one line to <root>/logs/scan_telemetry.jsonl for every scan
         (success OR refused), tagged with the unit, so misalignment rate per
         machine = count(outcome="misaligned") / total. Best-effort."""
@@ -1139,6 +1140,7 @@ class PureXSApp(ctk.CTk):
             unit_id, device_host = self._unit_attribution()
             log_dir = get_data_dir().parent / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
+            pos = positioning or {}
             entry = {
                 "ts": datetime.now().isoformat(timespec="seconds"),
                 "unit_id": unit_id,
@@ -1149,6 +1151,10 @@ class PureXSApp(ctk.CTk):
                 "sharpness": round(sharpness, 1),
                 "blurry": bool(sharpness and sharpness < _hb.SHARPNESS_WARN_THRESHOLD),
                 "blur_pattern": blur_pattern,
+                "occ_curvature": pos.get("occ_curvature", 0.0),
+                "occ_tilt": pos.get("occ_tilt", 0.0),
+                "lr_symmetry": pos.get("lr_symmetry", 0.0),
+                "midline_offset": pos.get("midline_offset", 0.0),
                 "outcome": outcome,
             }
             with open(log_dir / "scan_telemetry.jsonl", "a", encoding="utf-8") as f:
@@ -3772,8 +3778,11 @@ class PureXSApp(ctk.CTk):
 
         import hb_decoder as _hb
         sharp, blurry, pattern, hint = _hb.analyze_blur(img)
+        # Positioning proxies — silent telemetry only (Phase 1), no operator hint.
+        pos = _hb.analyze_positioning(img)
         self._write_scan_telemetry("ok", columns=len(self._expose_scanlines),
-                                   sharpness=sharp, blur_pattern=pattern)
+                                   sharpness=sharp, blur_pattern=pattern,
+                                   positioning=pos)
         # Non-blocking blur advisory — never blocks the workflow. The hint is
         # targeted: "positioning" (anterior out of focal trough → check bite
         # peg) vs "motion" (uniform blur → patient moved).
