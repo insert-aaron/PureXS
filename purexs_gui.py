@@ -3260,6 +3260,13 @@ class PureXSApp(ctk.CTk):
         self._expose_kv_peak = 0.0
         self._expose_start_time = time.perf_counter()
         self._got_kv_or_scanline = False
+        # Also clear the long-lived client's batch buffers so a stale scan from
+        # the previous patient can't be picked up by the completion handler
+        # (defense-in-depth alongside the reset at the top of _recv_scan_data).
+        if self._sirona_client is not None:
+            self._sirona_client._scan_scanlines = []
+            self._sirona_client._scan_kv_peak = 0.0
+            self._sirona_client._repair_mask = None
 
         # Update UI
         self._update_expose_eligibility()  # button → "In Session" now we're armed
