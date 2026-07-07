@@ -27,6 +27,8 @@ for npy in [
     'sidexis_tone_lut_v1.npy',
     # Adaptive tone match target (preferred over the fixed LUT).
     'sidexis_target_anchors.npy',
+    # MUSICA-lite per-band detail gains.
+    'sidexis_band_gains.npy',
 ]:
     npy_path = os.path.join(spec_dir, npy)
     if os.path.exists(npy_path):
