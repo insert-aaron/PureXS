@@ -20,6 +20,11 @@ for npy in [
     'flat_field_row_profile.npy',
     'sgf_frame_gain.npy',
     'sidexis_tone_lut.npy',
+    # Sidexis tone-match LUTs — v2 is the active default (loader prefers v2,
+    # falls back to v1). MUST be bundled or the default-on tone match silently
+    # no-ops in the frozen exe (loader returns None).
+    'sidexis_tone_lut_v2.npy',
+    'sidexis_tone_lut_v1.npy',
 ]:
     npy_path = os.path.join(spec_dir, npy)
     if os.path.exists(npy_path):

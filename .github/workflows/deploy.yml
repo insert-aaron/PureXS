@@ -61,6 +61,8 @@ jobs:
           copy calibration_capture.py publish\x64\decoder\
           copy requirements-decoder.txt publish\x64\decoder\requirements.txt
           if exist sidexis_tone_lut.npy copy sidexis_tone_lut.npy publish\x64\decoder\
+          if exist sidexis_tone_lut_v2.npy copy sidexis_tone_lut_v2.npy publish\x64\decoder\
+          if exist sidexis_tone_lut_v1.npy copy sidexis_tone_lut_v1.npy publish\x64\decoder\
           if exist sgf_frame_gain.npy copy sgf_frame_gain.npy publish\x64\decoder\
         shell: cmd
 
@@ -74,6 +76,8 @@ jobs:
           copy calibration_capture.py publish\x86\decoder\
           copy requirements-decoder.txt publish\x86\decoder\requirements.txt
           if exist sidexis_tone_lut.npy copy sidexis_tone_lut.npy publish\x86\decoder\
+          if exist sidexis_tone_lut_v2.npy copy sidexis_tone_lut_v2.npy publish\x86\decoder\
+          if exist sidexis_tone_lut_v1.npy copy sidexis_tone_lut_v1.npy publish\x86\decoder\
           if exist sgf_frame_gain.npy copy sgf_frame_gain.npy publish\x86\decoder\
         shell: cmd
 
