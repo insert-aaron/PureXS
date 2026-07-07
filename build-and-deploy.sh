@@ -28,6 +28,7 @@ DECODER_NPY=(
     "sidexis_tone_lut.npy"
     "sidexis_tone_lut_v2.npy"
     "sidexis_tone_lut_v1.npy"
+    "sidexis_target_anchors.npy"
     "sgf_frame_gain.npy"
 )
 
