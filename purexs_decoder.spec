@@ -25,6 +25,8 @@ for npy in [
     # no-ops in the frozen exe (loader returns None).
     'sidexis_tone_lut_v2.npy',
     'sidexis_tone_lut_v1.npy',
+    # Adaptive tone match target (preferred over the fixed LUT).
+    'sidexis_target_anchors.npy',
 ]:
     npy_path = os.path.join(spec_dir, npy)
     if os.path.exists(npy_path):
