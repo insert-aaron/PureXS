@@ -1131,7 +1131,8 @@ class PureXSApp(ctk.CTk):
     def _write_scan_telemetry(self, outcome: str, columns: int = 0,
                               sharpness: float = 0.0,
                               blur_pattern: str = "",
-                              positioning: dict | None = None) -> None:
+                              positioning: dict | None = None,
+                              reason: str = "") -> None:
         """Append one line to <root>/logs/scan_telemetry.jsonl for every scan
         (success OR refused), tagged with the unit, so misalignment rate per
         machine = count(outcome="misaligned") / total. Best-effort."""
@@ -1156,6 +1157,7 @@ class PureXSApp(ctk.CTk):
                 "lr_symmetry": pos.get("lr_symmetry", 0.0),
                 "midline_offset": pos.get("midline_offset", 0.0),
                 "outcome": outcome,
+                "reason": reason,   # populated for failure paths (e.g. arm_failed)
             }
             with open(log_dir / "scan_telemetry.jsonl", "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry) + "\n")
@@ -3486,6 +3488,13 @@ class PureXSApp(ctk.CTk):
         self._update_expose_eligibility()
         self._set_status("ERROR", "#F44336")
         self._log(f"Expose send failed: {exc}", "error")
+
+        # Fleet telemetry: record the arm/send failure (with reason) to the same
+        # per-unit scan_telemetry.jsonl, so "how often does the device drop
+        # mid-arm on real hardware?" is answerable from the log. Mirrors the WPF
+        # SironaService.WriteArmTelemetry path. Best-effort.
+        self._write_scan_telemetry(
+            "arm_failed", reason=f"{type(exc).__name__}: {exc}")
 
         # Dump diagnostics and show error modal
         self._dump_expose_fail_diagnostics(f"SEND_FAIL: {exc}")

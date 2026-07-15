@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
+using System.IO;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
@@ -402,6 +403,8 @@ public sealed class SironaService : ISironaService
         _scanlineParseOffset = 0;
         _lastKvFired = 0;
 
+        try
+        {
         // 1. Fresh session refresh (matches Python: no prior HB before CAPS)
         await SessionRefreshAsync(ct);
         Debug.WriteLine("[Sirona] Fresh session for arm (no prior HB)");
@@ -436,8 +439,18 @@ public sealed class SironaService : ISironaService
         payload.CopyTo(frame, header.Length);
         continuation.CopyTo(frame, header.Length + payload.Length);
 
-        await _stream.WriteAsync(frame, ct);
-        await _stream.FlushAsync(ct);
+        // Re-check the stream here rather than trusting the entry guard: the
+        // CAPS_RESP wait above can block up to 3s, and if the Orthophos drops
+        // the connection during that window the reader/heartbeat loop fires
+        // ReconnectAsync(), which nulls _stream out from under us. Reading the
+        // field directly into a local turns that race from a raw
+        // NullReferenceException ("Object reference not set…") into a clear,
+        // retry-able ConnectionException.
+        var stream = _stream;
+        if (stream is null)
+            throw new ConnectionException("Device disconnected during arming — reconnecting; please retry.");
+        await stream.WriteAsync(frame, ct);
+        await stream.FlushAsync(ct);
         Debug.WriteLine($"[Sirona] DATA_SEND: {payload.Length}B payload + {continuation.Length}B continuation (program=0x{program:X2})");
 
         // 4. Wait for DATA_ACK (0x1001)
@@ -462,6 +475,50 @@ public sealed class SironaService : ISironaService
         SetState(ConnectionState.Armed);
         DeviceArmed?.Invoke(this, EventArgs.Empty);
         Debug.WriteLine("[Sirona] Device ARMED — press R on keypad, then press EXPOSE button");
+        }
+        catch (Exception ex)
+        {
+            // Record arm failures to the same per-unit fleet log the scan
+            // telemetry uses, so "how often does the device drop mid-arm on real
+            // hardware?" is answerable from scan_telemetry.jsonl rather than a
+            // debugger. Best-effort; then rethrow so the ViewModel restores the
+            // Start Scan button and shows the message as before.
+            WriteArmTelemetry(examType, ex);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Appends one JSON line describing a failed arm attempt to
+    /// <c>&lt;root&gt;\logs\scan_telemetry.jsonl</c>, tagged with the unit so the
+    /// mid-arm disconnect rate per machine is countable
+    /// (event="arm_failed"). Best-effort — never throws into the arm flow.
+    /// </summary>
+    private void WriteArmTelemetry(string examType, Exception ex)
+    {
+        try
+        {
+            var dir = PureXSDataPaths.Logs;
+            Directory.CreateDirectory(dir);
+            var line = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                ts = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss"),
+                unit_id = _config?.UnitId ?? Environment.MachineName,
+                device_host = _config?.SironaHost,
+                exam = examType,
+                @event = "arm_failed",
+                reason = ex.GetType().Name,   // e.g. ConnectionException, IOException
+                detail = ex.Message,
+                state = _state.ToString(),    // Connected / Reconnecting / … at time of failure
+                connected = _stream is not null,
+            });
+            File.AppendAllText(Path.Combine(dir, "scan_telemetry.jsonl"), line + "\n");
+            _log?.Log($"Arm failed ({ex.GetType().Name}): {ex.Message}", "warning");
+        }
+        catch (Exception logEx)
+        {
+            Debug.WriteLine($"[Sirona] arm telemetry write failed: {logEx.Message}");
+        }
     }
 
     /// <inheritdoc />
