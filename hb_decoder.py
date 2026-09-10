@@ -1531,6 +1531,43 @@ def _repair_inline_telemetry(
     return result
 
 
+# Detector edge rows excluded from the wrap-score profile (see _wrap_score).
+_WRAP_EDGE_ROWS = 8
+
+
+def _seam_zscore(buf: bytes, row: int, height: int) -> float:
+    """How exceptional is the detector-row-profile jump at `row`?
+
+    A tail-trimmed off-phase scan splices the wrap seam at a *predictable*
+    row — empirically row == remainder (measured 280/283, 580/583, 230/233,
+    959/977 across the corpus). So rather than hunting a global max (which
+    the panel's saturated edge row wins), test that one row directly and
+    score it against the profile's own median/MAD.
+
+    Returns a robust z-score: ~0 when the reconstruction is coherent, large
+    (12-5000+) when the seam is really there. Diagnostic only — this does
+    NOT gate reconstruction; it is emitted as SEAM_Z for per-unit fleet
+    telemetry so fold rates can be measured before anything acts on them.
+
+    Known blind spots: last_scan_raw-2.bin (rem 583) is visibly folded but
+    shows no seam at row==remainder (a different failure mode), and partial
+    scans such as alexa_new_0513.bin (1160 columns) score weakly.
+    """
+    try:
+        arr = np.frombuffer(bytes(buf), dtype=">u2")
+        w = arr.size // height
+        if w < 100 or not (2 <= row < height - 2):
+            return 0.0
+        img = arr[:w * height].reshape(w, height).astype(np.float32)
+        d = np.abs(np.diff(img[w // 5:(4 * w) // 5].mean(axis=0)))
+        local = float(d[row - 1:row + 2].max())
+        med = float(np.median(d))
+        mad = float(np.median(np.abs(d - med)))
+        return (local - med) / (1.4826 * mad + 1e-6)
+    except Exception:  # diagnostics must never break reconstruction
+        return 0.0
+
+
 def _find_pixel_start(data: bytes, search_start: int = 60000,
                       search_end: int = 90000) -> int:
     """Find where actual pixel data begins using column-correlation.
@@ -1944,7 +1981,18 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> tuple[list[Scan
                 return float("inf")
             img = arr[:w * img_height].reshape(w, img_height).astype(np.float32)
             rm = img[w // 5:(4 * w) // 5].mean(axis=0)  # detector-row profile
-            return float(np.abs(np.diff(rm)).max())
+            d = np.abs(np.diff(rm))
+            # Exclude the detector's edge rows. The saturated telemetry /
+            # dark-reference row sits at the panel boundary and dominates
+            # max(|diff|) in BOTH candidates, so without this the score is
+            # blind: scan_20260904_112832 scored head=32985.1 vs tail=32986.0
+            # (ratio 1.0000 against a 0.75 threshold) and folded. Excluding 8
+            # rows gives ratio 0.080. Swept the 24-scan corpus in
+            # "PureXS - Gits/": exactly one decision flip (that scan), zero
+            # regressions — scan_20260628_180207 (remainder 283) still
+            # tail-trims as its comment above requires.
+            return float(d[_WRAP_EDGE_ROWS:-_WRAP_EDGE_ROWS].max()
+                         if d.size > 2 * _WRAP_EDGE_ROWS else d.max())
 
         if remainder_px > 50:
             _s_tail = _wrap_score(bytes(clean[:-trim_bytes]))
@@ -1965,6 +2013,13 @@ def _extract_panoramic(data: bytes, detector_height: int = 0) -> tuple[list[Scan
             log.warning("Reshape: trimming %d remainder pixels (%d bytes) from tail",
                         remainder_px, trim_bytes)
             clean = clean[:-trim_bytes]
+
+    # ── Seam diagnostic (telemetry only, never a gate) ────────────────
+    # Measured on the POST-trim buffer at the row the seam would occupy if
+    # the trim went the wrong way. Coherent reconstruction -> ~0.
+    _seam_z = _seam_zscore(bytes(clean), remainder_px, img_height) if remainder_px else 0.0
+    log.info("Seam z-score at row %d: %.1f", remainder_px, _seam_z)
+    print(f"SEAM_Z={_seam_z:.1f}", file=sys.stderr)
 
     # Verify clean buffer is evenly divisible (trim if not)
     if len(clean) % (img_height * 2) != 0:
