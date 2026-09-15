@@ -107,9 +107,12 @@ _fill_call_count = 0
 # Sidexis TIFF export of the same capture) that pulls our output's brightness/
 # contrast toward the Sidexis look (median ~167 → ~104; MAE to Sidexis dropped
 # 24% → ~15% on two independent matched pairs that agree within 0.1%).
-# ENABLED BY DEFAULT (v2) so every install gets the Sidexis-matched tone with
-# no per-system config. Disable per-site via env `PUREXS_SIDEXIS_TONE=0` or
-# config.json `"sidexis_tone": false` (the off-switch). v2 = median-average of
+# The adaptive stage is ON with the default "sidexis" render and OFF for "hd"
+# (it follows _render_mode; force via env `PUREXS_SIDEXIS_TONE=0|1` or
+# config.json `"sidexis_tone"`). WHAT it maps each scan onto is chosen by
+# _tone_target(): the built-in "july" look by default since 2026-09-15, the
+# Sidexis target on opt-in. This fixed LUT is the Sidexis curve and is only
+# used for "sidexis". v2 = median-average of
 # 2 matched pairs; both validated at normal exposure — the one residual risk is
 # an extreme-exposure patient (very thin/bright or large/dense) where a fixed
 # 1-D curve could over-darken, hence the per-site off-switch. See memory
@@ -119,10 +122,16 @@ _SIDEXIS_TONE_LUT_LOADED = False
 
 
 def _sidexis_tone_enabled() -> bool:
-    """True unless explicitly disabled. Sidexis tone match ships ON by default.
+    """Whether to apply the adaptive tone match + MUSICA-lite detail stage.
+
+    Follows the render mode unless set explicitly: ON for "sidexis" (the
+    default), OFF for "hd". The two only work as a pair. Measured on identical
+    raw bytes, "sidexis" render with tone OFF washes out to near-white (mean
+    ~200-210) and "hd" with tone ON comes out dark, so an unset key must never
+    land a site in either mismatched combination.
 
     Precedence: env PUREXS_SIDEXIS_TONE (0/1) wins; else config.json
-    "sidexis_tone" (defaults True when the key is absent); else on.
+    "sidexis_tone" when present; else follow _render_mode().
     """
     import os as _os
     env = _os.environ.get("PUREXS_SIDEXIS_TONE", "").strip()
@@ -134,10 +143,12 @@ def _sidexis_tone_enabled() -> bool:
         import json as _json
         cfg = get_data_dir() / "config.json"
         if cfg.exists():
-            return bool(_json.loads(cfg.read_text()).get("sidexis_tone", True))
+            v = _json.loads(cfg.read_text()).get("sidexis_tone")
+            if v is not None:
+                return bool(v)
     except Exception:
         pass
-    return True
+    return _render_mode() == "sidexis"
 
 
 def _load_sidexis_tone_lut() -> "np.ndarray | None":
@@ -181,12 +192,64 @@ _SIDEXIS_TARGET_CACHE: "tuple | None" = None
 _SIDEXIS_TARGET_LOADED = False
 
 
+# Default tone target: the look clinics had before the Sidexis target
+# ("july"). Same 15 anchor percentiles as sidexis_target_anchors.npy; values
+# are the per-percentile median of the foreground distribution over 53 real
+# patient scans rendered the pre-Sidexis way, and they sit between the two
+# July-2026 deliveries staff approved (p50 163 and 178; 169 here). Held in code,
+# not a bundled .npy, so the default can never be lost to a packaging miss --
+# a missing target asset silently degrades to the dark fixed Sidexis LUT.
+#
+# Measured on that corpus with the default "sidexis" chain: brightness 154.6-
+# 164.9 on every patient scan (the Sidexis target gave 108.6-120.9), median
+# fine detail 0.89x of the Sidexis-target render (worst 0.72x; the "hd" chain's
+# worst was 0.46x), clipping <= 1.93% white / 0.12% black.
+_JULY_TONE_TARGET = (
+    np.array([1, 3, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 97, 99], dtype=np.float64),
+    np.array([15, 26, 36, 63, 102, 130, 151, 169, 186, 201, 215, 229, 237, 242, 247], dtype=np.float64),
+)
+
+
+def _tone_target() -> str:
+    """Which distribution the adaptive tone match maps each scan onto:
+    "july" (default) or "sidexis" (opt-in Sidexis parity).
+
+    The Sidexis target pulls the median to ~112 by design, and each time it was
+    the default it drew the same complaint: "cloudy/blurry, dark middle"
+    (2026-07-11), "looking blurry" (2026-07-22), "blurry and dark" (Bachman,
+    2026-09-15). Override via env PUREXS_TONE_TARGET=july|sidexis or
+    config.json "tone_target"; env wins.
+    """
+    import os as _os
+    env = _os.environ.get("PUREXS_TONE_TARGET", "").strip().lower()
+    if env in ("july", "sidexis"):
+        return env
+    try:
+        import json as _json
+        cfg = get_data_dir() / "config.json"
+        if cfg.exists():
+            v = str(_json.loads(cfg.read_text()).get("tone_target", "july")).lower()
+            if v == "sidexis":
+                return "sidexis"
+    except Exception:
+        pass
+    return "july"
+
+
 def _load_sidexis_target() -> "tuple | None":
-    """Load the canonical Sidexis (percentiles, target_values) anchors, cached."""
+    """Load the tone-match (percentiles, target_values) anchors, cached.
+
+    Returns the built-in "july" target unless _tone_target() selects
+    "sidexis", in which case the Sidexis anchors file is loaded as before.
+    """
     global _SIDEXIS_TARGET_CACHE, _SIDEXIS_TARGET_LOADED
     if _SIDEXIS_TARGET_LOADED:
         return _SIDEXIS_TARGET_CACHE
     _SIDEXIS_TARGET_LOADED = True
+    if _tone_target() != "sidexis":
+        _SIDEXIS_TARGET_CACHE = _JULY_TONE_TARGET
+        log.info("Tone target: july (built-in)")
+        return _SIDEXIS_TARGET_CACHE
     for p in (get_data_dir() / "sidexis_target_anchors.npy",
               Path(__file__).parent / "sidexis_target_anchors.npy"):
         try:
@@ -240,6 +303,12 @@ _SIDEXIS_BAND_GAINS_LOADED = False
 
 def _render_mode() -> str:
     """Resolve the output render path: "sidexis" (default) or "hd" (legacy).
+
+    "sidexis" stays the default because it keeps fine detail. On a 53-scan
+    patient corpus (2026-09-15) the "hd" chain's pre-blur + bilateral denoise
+    dropped median fine-structure energy 0.064 -> 0.052, to as little as 0.46x
+    on one scan, and posterized others. The dark look staff complained about
+    came from the tone TARGET, not this chain; see _tone_target().
 
     "sidexis" skips the HD chain's Gaussian pre-blur, CLAHE tile equalization,
     bilateral denoise and unsharp — the steps that destroy native detector
@@ -3827,10 +3896,10 @@ def reconstruct_image(
     # viewer's left. L/R placement is preserved (180° rotation, not mirror).
     img_pil = img_pil.transpose(Image.ROTATE_180)
 
-    # ── Sidexis tone match (default ON, per-site off-switch) ──────────
+    # ── Adaptive tone match (default ON; target from _tone_target) ──────────
     # Match this image's tone to the Sidexis look. Preferred path is ADAPTIVE:
-    # remap this image's anchor percentiles onto the canonical Sidexis target
-    # distribution, so every patient lands on the Sidexis tone regardless of
+    # remap this image's anchor percentiles onto the selected target
+    # distribution (see _tone_target), so every patient lands on one tone regardless of
     # baseline brightness (true 1:1 on brightness; cannot over-darken a dark
     # patient). Falls back to the fixed v2 LUT if the target anchors file isn't
     # available. Applied last, on the finished (post-sharpen, post-rotate)
@@ -3840,8 +3909,11 @@ def reconstruct_image(
         _adaptive = _sidexis_adaptive_lut(_img8)
         if _adaptive is not None:
             img_pil = img_pil.point(_adaptive.tolist())
-            log.info("Sidexis tone match applied (adaptive per-image)")
-        else:
+            log.info("Adaptive tone match applied (target=%s)", _tone_target())
+        elif _tone_target() == "sidexis":
+            # The fixed LUT is the Sidexis curve (median ~167 -> ~104). Only
+            # fall back to it when Sidexis was selected, or a scan too sparse
+            # for the adaptive fit would come out dark under "july".
             _tone_lut = _load_sidexis_tone_lut()
             if _tone_lut is not None:
                 img_pil = img_pil.point(_tone_lut.tolist())
